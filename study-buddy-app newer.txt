@@ -1,0 +1,6574 @@
+# Study Buddy - Complete App Structure (Modular Architecture)
+
+## Project Structure Overview
+```
+study-buddy/
+├── app.json
+├── package.json
+├── babel.config.js
+├── App.js
+├── src/
+│   ├── screens/
+│   │   ├── OnboardingScreen.js
+│   │   ├── MainScreen.js
+│   │   ├── ParentSettingsScreen.js
+│   │   ├── CelebrationScreen.js
+│   │   ├── ModeSelectionScreen.js
+│   │   └── CalmModeScreen.js
+│   ├── components/
+│   │   ├── BuddyCharacter.js
+│   │   ├── StudyTimer.js
+│   │   ├── CheckInMessage.js
+│   │   └── BigButton.js
+│   ├── utils/
+│   │   ├── storage.js
+│   │   ├── audio.js
+│   │   └── constants.js
+│   └── assets/
+│       └── animations/
+│           └── buddy-animations.js
+└── README.md
+```
+
+---
+
+## study-buddy/package.json
+```json
+{
+  "name": "study-buddy",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "~49.0.0",
+    "expo-status-bar": "~1.6.0",
+    "expo-av": "~13.4.1",
+    "expo-speech": "~11.3.0",
+    "expo-haptics": "~12.4.0",
+    "expo-keep-awake": "~12.3.0",
+    "expo-camera": "~13.4.0",
+    "react": "18.2.0",
+    "react-native": "0.72.6",
+    "@react-navigation/native": "^6.1.7",
+    "@react-navigation/stack": "^6.3.17",
+    "react-native-safe-area-context": "4.6.3",
+    "react-native-screens": "~3.22.0",
+    "react-native-gesture-handler": "~2.12.0",
+    "@react-native-async-storage/async-storage": "1.18.2",
+    "lottie-react-native": "5.1.6",
+    "react-native-svg": "13.9.0",
+    "expo-notifications": "~0.20.1",
+    "react-native-reanimated": "~3.3.0",
+    "react-native-purchases": "^7.0.0",
+    "@react-native-community/slider": "4.4.2",
+    "expo-localization": "~14.2.1",
+    "expo-file-system": "~15.4.5"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "private": true
+}
+```
+
+---
+
+## study-buddy/app.json
+```json
+{
+  "expo": {
+    "name": "Study Buddy",
+    "slug": "study-buddy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#4A90E2"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.focusflow.studybuddy",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Study Buddy needs microphone access to record encouraging messages.",
+        "NSCameraUsageDescription": "Study Buddy uses the camera to take an optional photo of completed homework.",
+        "NSPhotoLibraryAddUsageDescription": "Study Buddy saves homework photos to your device only.",
+        "UIFileSharingEnabled": false,
+        "LSSupportsOpeningDocumentsInPlace": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#4A90E2"
+      },
+      "package": "com.focusflow.studybuddy",
+      "versionCode": 1,
+      "permissions": ["RECORD_AUDIO", "VIBRATE", "CAMERA"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "your-project-id"
+      }
+    }
+  }
+}
+```
+
+---
+
+## study-buddy/babel.config.js
+```javascript
+module.exports = function(api) {
+  api.cache(true);
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: ['react-native-reanimated/plugin']
+  };
+};
+```
+
+---
+
+## study-buddy/App.js
+```javascript
+import React, { useState, useEffect } from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { StatusBar } from 'expo-status-bar';
+import * as KeepAwake from 'expo-keep-awake';
+import * as Notifications from 'expo-notifications';
+import { Platform } from 'react-native';
+import Purchases from 'react-native-purchases';
+
+import OnboardingScreen from './src/screens/OnboardingScreen';
+import ModeSelectionScreen from './src/screens/ModeSelectionScreen';
+import MainScreen from './src/screens/MainScreen';
+import CalmModeScreen from './src/screens/CalmModeScreen';
+import ParentSettingsScreen from './src/screens/ParentSettingsScreen';
+import CelebrationScreen from './src/screens/CelebrationScreen';
+import PaywallScreen from './src/screens/PaywallScreen';
+import { getStorageItem, setStorageItem } from './src/utils/storage';
+import { initializeLanguage } from './src/utils/i18n';
+import { cleanOldPhotos } from './src/utils/photoManager';
+
+const Stack = createStackNavigator();
+
+// Subscription Context
+export const SubscriptionContext = React.createContext({
+  isPremium: false,
+  checkPremiumStatus: () => {},
+});
+
+export default function App() {
+  const [isFirstLaunch, setIsFirstLaunch] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isPremium, setIsPremium] = useState(false);
+
+  useEffect(() => {
+    checkFirstLaunch();
+    KeepAwake.activateKeepAwakeAsync();
+    setupNotifications();
+    initializeLanguage();
+    cleanOldPhotos(); // Clean up old photos on app start
+    initializeRevenueCat();
+    
+    const sub = Notifications.addNotificationResponseReceivedListener(async (response) => {
+      try {
+        await setStorageItem('lastNotifAction', response.actionIdentifier || '');
+      } catch (e) {}
+    });
+    return () => sub.remove();
+  }, []);
+
+  const initializeRevenueCat = async () => {
+    try {
+      // Replace with your actual RevenueCat API keys
+      const apiKey = Platform.select({
+        ios: 'appl_YOUR_IOS_API_KEY',
+        android: 'goog_YOUR_ANDROID_API_KEY',
+      });
+      
+      if (apiKey) {
+        await Purchases.configure({ apiKey });
+        checkPremiumStatus();
+      }
+    } catch (e) {
+      console.log('Error initializing RevenueCat:', e);
+    }
+  };
+
+  const checkPremiumStatus = async () => {
+    try {
+      const customerInfo = await Purchases.getCustomerInfo();
+      setIsPremium(customerInfo.entitlements.active['premium'] !== undefined);
+    } catch (e) {
+      console.log('Error checking premium status:', e);
+    }
+  };
+  const setupNotifications = async () => {
+    try {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+      }
+      if (finalStatus !== 'granted') {
+        // Permission denied; continue without notifications
+        return;
+      }
+      // Android channel
+      await Notifications.setNotificationChannelAsync('checkins', {
+        name: 'Check-ins',
+        importance: Notifications.AndroidImportance.DEFAULT,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#FF231F7C',
+      });
+      // Action category for check-in notifications
+      await Notifications.setNotificationCategoryAsync('checkin-actions', [
+        { identifier: 'RESUME', buttonTitle: 'Resume' },
+        { identifier: 'BREAK', buttonTitle: '+5 min break' },
+        { identifier: 'DONE', buttonTitle: "I'm done" },
+      ]);
+    } catch (e) {
+      // no-op
+    }
+  };
+
+  const checkFirstLaunch = async () => {
+    const hasLaunched = await getStorageItem('hasLaunched');
+    setIsFirstLaunch(!hasLaunched);
+    setIsLoading(false);
+  };
+
+  if (isLoading) {
+    return null; // Or a loading screen
+  }
+
+  return (
+    <SubscriptionContext.Provider value={{ isPremium, checkPremiumStatus }}>
+      <NavigationContainer>
+        <StatusBar style="dark" />
+        <Stack.Navigator 
+          screenOptions={{ 
+            headerShown: false,
+            gestureEnabled: false 
+          }}
+        >
+          {isFirstLaunch ? (
+            <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+          ) : null}
+          <Stack.Screen name="ModeSelection" component={ModeSelectionScreen} />
+          <Stack.Screen name="Main" component={MainScreen} />
+          <Stack.Screen name="CalmMode" component={CalmModeScreen} />
+          <Stack.Screen name="ParentSettings" component={ParentSettingsScreen} />
+          <Stack.Screen name="Celebration" component={CelebrationScreen} />
+          <Stack.Screen 
+            name="Paywall" 
+            component={PaywallScreen}
+            options={{ presentation: 'modal' }}
+          />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </SubscriptionContext.Provider>
+  );
+}
+```
+
+---
+
+## study-buddy/src/utils/constants.js
+```javascript
+import { Dimensions } from 'react-native';
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+
+// ===================================
+// MODULAR CONFIGURATION SYSTEM
+// Single source of truth for all app behavior
+// ===================================
+
+// === CORE TIMING CONFIGURATION ===
+export const TIMING_CONFIG = {
+  // Animation durations (milliseconds)
+  animations: {
+    fadeIn: 500,
+    slideUp: 300,
+    breathingIn: 4000,
+    breathingOut: 4000,
+    buttonPress: 100,
+    celebrationDisplay: 3000,
+  },
+  
+  // Session timings (milliseconds)
+  session: {
+    buddyFadeDelay: 60 * 1000, // 1 minute before buddy fades
+    checkInDisplay: 5 * 1000, // How long check-in messages show
+    modalTimeout: 30 * 1000, // Auto-pause if no interaction
+    breathingCycle: 8 * 1000, // Calm mode breathing cycle
+  },
+  
+  // Intervals (seconds - converted to ms in usage)
+  intervals: {
+    liveActivityUpdate: 30, // Update "X kids studying" counter
+    progressSave: 60, // Auto-save progress
+  }
+};
+
+// === RESPONSIVE UI SCALING ===
+export const UI_SCALING_CONFIG = {
+  // Screen size breakpoints
+  breakpoints: {
+    small: 350,   // iPhone SE
+    medium: 414,  // Standard phones
+    large: 768,   // Tablets
+    xlarge: 1024  // Large tablets
+  },
+  
+  // Age-based scaling multipliers
+  ageScaling: {
+    young: { 
+      buddySize: 1.2,     // 20% larger buddy
+      fontSize: 1.3,     // 30% larger text
+      buttonScale: 1.2,   // 20% larger buttons
+      spacing: 1.2,       // 20% more spacing
+      iconSize: 1.4       // 40% larger icons
+    },
+    elementary: { 
+      buddySize: 1.0,     // Base size
+      fontSize: 1.0,     // Base text
+      buttonScale: 1.0,   // Base buttons
+      spacing: 1.0,       // Base spacing
+      iconSize: 1.0       // Base icons
+    },
+    tween: { 
+      buddySize: 0.85,    // 15% smaller buddy
+      fontSize: 0.95,    // 5% smaller text
+      buttonScale: 0.95,  // 5% smaller buttons
+      spacing: 0.9,       // 10% less spacing
+      iconSize: 0.9       // 10% smaller icons
+    },
+    teen: { 
+      buddySize: 0.7,     // 30% smaller buddy
+      fontSize: 0.85,    // 15% smaller text
+      buttonScale: 0.9,   // 10% smaller buttons
+      spacing: 0.8,       // 20% less spacing
+      iconSize: 0.8       // 20% smaller icons
+    }
+  },
+  
+  // Base sizes (scaled by age and screen)
+  baseSizes: {
+    buddySize: 180,
+    buttonHeight: 60,
+    iconSize: 24,
+    borderRadius: 15,
+    shadowRadius: 8
+  }
+};
+
+// === MODULAR AGE GROUP DATA ===
+// All age-specific behavior controlled from here
+const AGE_GROUP_TEMPLATES = {
+  young: {
+    id: 'young',
+    ageRange: [5, 7],
+    displayRange: '5-7',
+    
+    // Session defaults (minutes)
+    session: {
+      defaultDuration: 10,
+      breakDuration: 3,
+      checkInFrequency: 2,
+      interactionFrequency: 15,
+      maxDuration: 20
+    },
+    
+    // Voice configuration
+    voice: {
+      pitch: 1.3,
+      rate: 0.8,
+      volume: 1.0
+    },
+    
+    // Visual theme
+    theme: {
+      primary: '#FFB6C1',
+      secondary: '#FFE4E1',
+      accent: '#FF69B4',
+      background: '#FFF8F9'
+    },
+    
+    // Content personality
+    personality: {
+      encouragementLevel: 'high',    // high, medium, low
+      celebrationStyle: 'enthusiastic', // enthusiastic, balanced, cool, minimal
+      languageComplexity: 'simple', // simple, moderate, advanced, mature
+      emojiUsage: 'frequent'        // frequent, moderate, minimal, none
+    },
+    
+    // Parent gate (math difficulty)
+    parentGate: {
+      minNumber: 1,
+      maxNumber: 10,
+      operation: 'addition'
+    }
+  },
+  
+  elementary: {
+    id: 'elementary',
+    ageRange: [8, 10],
+    displayRange: '8-10',
+    
+    session: {
+      defaultDuration: 15,
+      breakDuration: 5,
+      checkInFrequency: 5,
+      interactionFrequency: 20,
+      maxDuration: 30
+    },
+    
+    voice: {
+      pitch: 1.1,
+      rate: 0.9,
+      volume: 1.0
+    },
+    
+    theme: {
+      primary: '#87CEEB',
+      secondary: '#E0F6FF',
+      accent: '#4682B4',
+      background: '#F0F8FF'
+    },
+    
+    personality: {
+      encouragementLevel: 'medium',
+      celebrationStyle: 'balanced',
+      languageComplexity: 'moderate',
+      emojiUsage: 'moderate'
+    },
+    
+    parentGate: {
+      minNumber: 10,
+      maxNumber: 30,
+      operation: 'addition'
+    }
+  },
+  
+  tween: {
+    id: 'tween',
+    ageRange: [11, 13],
+    displayRange: '11-13',
+    
+    session: {
+      defaultDuration: 20,
+      breakDuration: 5,
+      checkInFrequency: 7,
+      interactionFrequency: 25,
+      maxDuration: 45
+    },
+    
+    voice: {
+      pitch: 1.0,
+      rate: 0.95,
+      volume: 0.9
+    },
+    
+    theme: {
+      primary: '#98FB98',
+      secondary: '#F0FFF0',
+      accent: '#228B22',
+      background: '#F8FFF8'
+    },
+    
+    personality: {
+      encouragementLevel: 'medium',
+      celebrationStyle: 'cool',
+      languageComplexity: 'advanced',
+      emojiUsage: 'minimal'
+    },
+    
+    parentGate: {
+      minNumber: 20,
+      maxNumber: 50,
+      operation: 'addition'
+    }
+  },
+  
+  teen: {
+    id: 'teen',
+    ageRange: [14, 18],
+    displayRange: '14+',
+    
+    session: {
+      defaultDuration: 25,
+      breakDuration: 5,
+      checkInFrequency: 10,
+      interactionFrequency: 30,
+      maxDuration: 60
+    },
+    
+    voice: {
+      pitch: 0.95,
+      rate: 1.0,
+      volume: 0.8
+    },
+    
+    theme: {
+      primary: '#DDA0DD',
+      secondary: '#F8F0FF',
+      accent: '#9370DB',
+      background: '#FDFBFF'
+    },
+    
+    personality: {
+      encouragementLevel: 'low',
+      celebrationStyle: 'minimal',
+      languageComplexity: 'mature',
+      emojiUsage: 'none'
+    },
+    
+    parentGate: {
+      minNumber: 50,
+      maxNumber: 100,
+      operation: 'addition'
+    }
+  }
+};
+
+// === DYNAMIC CONTENT GENERATION ===
+// Generate age-appropriate content from personality templates
+const CONTENT_TEMPLATES = {
+  // UI Labels by complexity and celebration style
+  labels: {
+    simple_enthusiastic: {
+      buddySelectionTitle: 'Pick Your Friend!',
+      buddySelectionSubtitle: 'Who will help you today?',
+      namePrompt: 'Tell me your name, superstar!',
+      readyMessage: 'so excited to be your friend!',
+      startButtonText: 'Let\'s Learn! 🌈',
+      breakButtonText: 'Break Time! 🎈',
+      endButtonText: 'All Done! 🌟',
+      streakLabel: 'day streak',
+      statsLabel: 'Learning time'
+    },
+    moderate_balanced: {
+      buddySelectionTitle: 'Choose Your Buddy!',
+      buddySelectionSubtitle: 'Pick your study partner!',
+      namePrompt: 'What should I call you?',
+      readyMessage: 'ready to help you focus!',
+      startButtonText: 'Start Studying! 📚',
+      breakButtonText: 'Break Time! 🌟',
+      endButtonText: 'Finished! 🎉',
+      streakLabel: 'day streak',
+      statsLabel: 'Study time'
+    },
+    advanced_cool: {
+      buddySelectionTitle: 'Pick Your Focus Friend',
+      buddySelectionSubtitle: 'Choose your style',
+      namePrompt: 'What\'s your name?',
+      readyMessage: 'here to help you crush it!',
+      startButtonText: 'Let\'s Go 💪',
+      breakButtonText: 'Quick Break',
+      endButtonText: 'Done ✓',
+      streakLabel: 'days',
+      statsLabel: 'Focus time'
+    },
+    mature_minimal: {
+      buddySelectionTitle: 'Focus Mode',
+      buddySelectionSubtitle: 'Select your vibe',
+      namePrompt: 'Name (optional)',
+      readyMessage: 'ready.',
+      startButtonText: 'Start',
+      breakButtonText: 'Break',
+      endButtonText: 'End',
+      streakLabel: 'days',
+      statsLabel: 'Total'
+    }
+  },
+  
+  // Messages by encouragement level
+  messages: {
+    high: [
+      'You\'re doing AMAZING! 🌟',
+      'Wow! Look at you go! 🚀',
+      'Super duper job! 🌈',
+      'You\'re the best! 💖',
+      'Keep being awesome! ⭐'
+    ],
+    medium: [
+      'Great focus! Keep it up! 🌟',
+      'You\'re doing awesome! 💪',
+      'Nice work! Stay strong! 🚀',
+      'Fantastic job! 🎯',
+      'Keep going, you\'ve got this! ⭐'
+    ],
+    low: [
+      'In the zone 🎯',
+      'Solid 💯',
+      'Keep going 📈',
+      'Progress ✓',
+      'On track 🎪'
+    ]
+  },
+  
+  // Break messages by style
+  breaks: {
+    enthusiastic: {
+      title: 'Wiggle Break! 🎉',
+      message: 'Time to jump, dance, or get a snack!',
+      resumeText: 'More Learning!'
+    },
+    balanced: {
+      title: 'Break Time!',
+      message: 'Great work! Take 5 minutes to stretch or grab water.',
+      resumeText: 'Back to Work!'
+    },
+    cool: {
+      title: 'Break Time',
+      message: 'Good session. Take 5.',
+      resumeText: 'Continue'
+    },
+    minimal: {
+      title: 'Break',
+      message: '5 minute break.',
+      resumeText: 'Resume'
+    }
+  }
+};
+
+// === SUBJECT CONFIGURATION ===
+export const SUBJECT_SYSTEM = {
+  // Subject definitions with metadata
+  subjects: {
+    // Elementary subjects
+    math: { 
+      id: 'math', label: 'Math', emoji: '🔢', 
+      category: 'core', difficulty: 'medium',
+      checkIns: ['Check your calculations!', 'Show your work!', 'One problem at a time', 'Double-check that answer', 'Remember your formulas']
+    },
+    reading: { 
+      id: 'reading', label: 'Reading', emoji: '📚', 
+      category: 'core', difficulty: 'easy',
+      checkIns: ['What\'s happening now?', 'Who\'s the main character?', 'What do you think happens next?', 'Picture the scene', 'Keep going, great reading!']
+    },
+    writing: { 
+      id: 'writing', label: 'Writing', emoji: '✏️', 
+      category: 'core', difficulty: 'medium',
+      checkIns: ['Check your spelling!', 'Add more details', 'How many sentences so far?', 'Remember punctuation', 'Great writing flow!']
+    },
+    other: { 
+      id: 'other', label: 'Other', emoji: '📝', 
+      category: 'flexible', difficulty: 'easy',
+      checkIns: ['Keep it up!', 'You\'re doing great!', 'Stay focused!', 'Almost there!', 'Excellent work!']
+    },
+    
+    // Advanced subjects
+    science: { 
+      id: 'science', label: 'Science', emoji: '🔬', 
+      category: 'stem', difficulty: 'medium',
+      checkIns: ['Test your hypothesis', 'Check your method', 'What\'s the evidence?', 'Think like a scientist', 'Record your observations']
+    },
+    chemistry: { 
+      id: 'chemistry', label: 'Chemistry', emoji: '⚗️', 
+      category: 'stem', difficulty: 'hard',
+      checkIns: ['Balance those equations!', 'Check your formulas', 'Remember units!', 'Think about reactions', 'Safety first!']
+    },
+    biology: { 
+      id: 'biology', label: 'Biology', emoji: '🧬', 
+      category: 'stem', difficulty: 'medium',
+      checkIns: ['Think about the process', 'Draw it out if it helps', 'Check your terms', 'Remember the system', 'Life is amazing!']
+    },
+    history: { 
+      id: 'history', label: 'History', emoji: '🏛️', 
+      category: 'social', difficulty: 'medium',
+      checkIns: ['Dates and names matter', 'What caused this?', 'Think about the timeline', 'Connect the events', 'History repeats!']
+    },
+    geography: { 
+      id: 'geography', label: 'Geography', emoji: '🌍', 
+      category: 'social', difficulty: 'easy',
+      checkIns: ['Picture the map', 'Remember locations', 'Think about connections', 'Climate matters', 'Explore the world!']
+    }
+  },
+  
+  // Age-appropriate subject groupings
+  ageGroups: {
+    young: ['math', 'reading', 'writing', 'other'],
+    elementary: ['math', 'reading', 'writing', 'other'],
+    tween: ['math', 'reading', 'writing', 'science', 'history', 'geography', 'other'],
+    teen: ['math', 'reading', 'writing', 'science', 'chemistry', 'biology', 'history', 'geography', 'other']
+  }
+};
+
+// === GAMIFICATION SYSTEM ===
+export const GAMIFICATION_CONFIG = {
+  // Surprise events (5% chance per session)
+  surprises: {
+    frequency: 0.05,
+    events: [
+      { id: 'power_hour', message: 'Power Hour! Everything counts double!', emoji: '⚡' },
+      { id: 'buddy_birthday', message: 'It\'s Buddy\'s Birthday!', emoji: '🎂' },
+      { id: 'opposite_day', message: 'Opposite Day! Breaks are longer!', emoji: '🔄' },
+      { id: 'challenge_mode', message: 'Challenge Mode! Beat yesterday!', emoji: '🏆' },
+      { id: 'guest_buddy', message: 'Guest Buddy visiting!', emoji: '👋' },
+      { id: 'speed_round', message: 'Speed Round! Quick focus!', emoji: '💨' },
+      { id: 'quiet_mode', message: 'Shh... Library Mode!', emoji: '🤫' },
+      { id: 'party_mode', message: 'Party Mode! Extra celebrations!', emoji: '🎉' }
+    ]
+  },
+  
+  // Mystery Monday events (every Monday)
+  mysteryMonday: [
+    'Buddy has a hat today!',
+    'Timer counts UP instead of down!',
+    'Everything is backwards!',
+    'Night mode activated!',
+    'Speed mode - shorter sessions!',
+    'Buddy is feeling quiet today',
+    'Double points day!',
+    'Surprise colors everywhere!'
+  ],
+  
+  // Seasonal themes (auto-applied by month)
+  seasonal: {
+    january: { name: 'New Year', emoji: '🎊', color: '#FFD700' },
+    february: { name: 'Hearts', emoji: '💕', color: '#FF69B4' },
+    march: { name: 'Spring', emoji: '🌸', color: '#98FB98' },
+    april: { name: 'Rain', emoji: '🌧️', color: '#87CEEB' },
+    may: { name: 'Flowers', emoji: '🌺', color: '#FF6347' },
+    june: { name: 'Summer', emoji: '☀️', color: '#FFD700' },
+    july: { name: 'Beach', emoji: '🏖️', color: '#20B2AA' },
+    august: { name: 'Back to School', emoji: '🎒', color: '#FF8C00' },
+    september: { name: 'Fall', emoji: '🍂', color: '#D2691E' },
+    october: { name: 'Halloween', emoji: '🎃', color: '#FF8C00' },
+    november: { name: 'Thankful', emoji: '🦃', color: '#8B4513' },
+    december: { name: 'Winter', emoji: '❄️', color: '#00CED1' }
+  }
+};
+
+// ===================================
+// COMPUTED CONFIGURATIONS
+// Generated dynamically from templates
+// ===================================
+
+// Generate parent gate questions
+function generateParentGate(ageTemplate) {
+  const { minNumber, maxNumber, operation } = ageTemplate.parentGate;
+  const a = Math.floor(Math.random() * (maxNumber - minNumber)) + minNumber;
+  const b = Math.floor(Math.random() * (maxNumber - minNumber)) + minNumber;
+  
+  switch (operation) {
+    case 'addition':
+      return {
+        question: `What's ${a} + ${b}?`,
+        answer: (a + b).toString()
+      };
+    default:
+      return { question: `What's ${a} + ${b}?`, answer: (a + b).toString() };
+  }
+}
+
+// Generate content from templates
+function generateContentForAge(ageTemplate) {
+  const { languageComplexity, celebrationStyle, encouragementLevel } = ageTemplate.personality;
+  const contentKey = `${languageComplexity}_${celebrationStyle}`;
+  
+  const labels = CONTENT_TEMPLATES.labels[contentKey] || CONTENT_TEMPLATES.labels.moderate_balanced;
+  const messages = CONTENT_TEMPLATES.messages[encouragementLevel] || CONTENT_TEMPLATES.messages.medium;
+  const breakInfo = CONTENT_TEMPLATES.breaks[celebrationStyle] || CONTENT_TEMPLATES.breaks.balanced;
+  const parentGate = generateParentGate(ageTemplate);
+  
+  return {
+    ...labels,
+    checkInMessages: messages,
+    breakTitle: breakInfo.title,
+    breakMessage: breakInfo.message,
+    resumeButtonText: breakInfo.resumeText,
+    parentGateQuestion: parentGate.question,
+    parentGateAnswer: parentGate.answer,
+    
+    // Generated session messages
+    startMessage: generateStartMessage(ageTemplate.personality),
+    welcomeBackMessage: generateWelcomeMessage(ageTemplate.personality),
+    completionMessage: generateCompletionMessage(ageTemplate.personality)
+  };
+}
+
+function generateStartMessage(personality) {
+  const templates = {
+    simple: 'Yay! Let\'s learn together! You\'re amazing!',
+    moderate: 'Let\'s do this! I\'m right here with you.',
+    advanced: 'Let\'s get this done.',
+    mature: 'Focus mode activated.'
+  };
+  return templates[personality.languageComplexity] || templates.moderate;
+}
+
+function generateWelcomeMessage(personality) {
+  const templates = {
+    simple: 'Welcome back superstar!',
+    moderate: 'Welcome back! Ready to continue?',
+    advanced: 'Back at it. Nice.',
+    mature: 'Resuming.'
+  };
+  return templates[personality.languageComplexity] || templates.moderate;
+}
+
+function generateCompletionMessage(personality) {
+  const templates = {
+    simple: 'Amazing job! You\'re a superstar!',
+    moderate: 'Excellent work! You did it!',
+    advanced: 'Solid work today.',
+    mature: 'Session complete.'
+  };
+  return templates[personality.languageComplexity] || templates.moderate;
+}
+
+// ===================================
+// FINAL COMPUTED CONFIGURATIONS
+// Ready-to-use by components
+// ===================================
+
+// Generate complete age configurations
+export const AGE_CONFIGS = Object.fromEntries(
+  Object.entries(AGE_GROUP_TEMPLATES).map(([key, template]) => [
+    key,
+    {
+      // Copy base template
+      ...template,
+      
+      // Add computed content
+      ...generateContentForAge(template),
+      
+      // Convert session minutes to seconds for timers
+      sessionLength: template.session.defaultDuration * 60,
+      breakDuration: template.session.breakDuration * 60,
+      checkInFrequency: template.session.checkInFrequency,
+      interactionFrequency: template.session.interactionFrequency,
+      
+      // Add computed UI properties
+      buddySize: UI_SCALING_CONFIG.baseSizes.buddySize * UI_SCALING_CONFIG.ageScaling[key].buddySize,
+      fontSize: UI_SCALING_CONFIG.ageScaling[key].fontSize,
+      buttonScale: UI_SCALING_CONFIG.ageScaling[key].buttonScale,
+      
+      // Voice properties (direct copy)
+      voicePitch: template.voice.pitch,
+      voiceRate: template.voice.rate,
+      
+      // Theme properties (direct copy) 
+      primaryColor: template.theme.primary,
+      secondaryColor: template.theme.secondary,
+      accentColor: template.theme.accent
+    }
+  ])
+);
+
+// ===================================
+// UTILITY FUNCTIONS
+// For components to access configurations
+// ===================================
+
+// Get configuration for specific age group
+export const getAgeConfig = (ageGroup) => {
+  return AGE_CONFIGS[ageGroup] || AGE_CONFIGS.elementary;
+};
+
+// Get subjects appropriate for age
+export const getSubjectsForAge = (ageGroup) => {
+  const subjectIds = SUBJECT_SYSTEM.ageGroups[ageGroup] || SUBJECT_SYSTEM.ageGroups.elementary;
+  return subjectIds.map(id => SUBJECT_SYSTEM.subjects[id]);
+};
+
+// Get check-in messages for subject
+export const getSubjectCheckIns = (subjectId) => {
+  return SUBJECT_SYSTEM.subjects[subjectId]?.checkIns || SUBJECT_SYSTEM.subjects.other.checkIns;
+};
+
+// Get responsive value based on screen size
+export const getResponsiveValue = (values) => {
+  if (screenWidth < UI_SCALING_CONFIG.breakpoints.small) return values.small || values.medium;
+  if (screenWidth < UI_SCALING_CONFIG.breakpoints.medium) return values.medium;
+  if (screenWidth < UI_SCALING_CONFIG.breakpoints.large) return values.large || values.medium;
+  return values.xlarge || values.large;
+};
+
+// Get scaled size for age group
+export const getScaledSize = (baseSize, ageGroup, sizeType = 'buddySize') => {
+  const scaling = UI_SCALING_CONFIG.ageScaling[ageGroup] || UI_SCALING_CONFIG.ageScaling.elementary;
+  return baseSize * scaling[sizeType];
+};
+
+// Get timing value
+export const getTiming = (category, key) => {
+  return TIMING_CONFIG[category]?.[key] || 1000;
+};
+
+// Get current seasonal theme
+export const getCurrentSeasonalTheme = () => {
+  const month = new Date().getMonth(); // 0-11
+  const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 
+                     'july', 'august', 'september', 'october', 'november', 'december'];
+  return GAMIFICATION_CONFIG.seasonal[monthNames[month]];
+};
+
+// Get random surprise event
+export const getRandomSurpriseEvent = () => {
+  const events = GAMIFICATION_CONFIG.surprises.events;
+  return events[Math.floor(Math.random() * events.length)];
+};
+
+// Check if surprise should trigger
+export const shouldTriggerSurprise = () => {
+  return Math.random() < GAMIFICATION_CONFIG.surprises.frequency;
+};
+
+// Get Mystery Monday change for current week
+export const getMysteryMondayChange = () => {
+  const today = new Date();
+  if (today.getDay() !== 1) return null; // Not Monday
+  
+  const weekNumber = Math.floor(today.getDate() / 7);
+  const changes = GAMIFICATION_CONFIG.mysteryMonday;
+  return changes[weekNumber % changes.length];
+};
+
+// ===================================
+// BACKWARD COMPATIBILITY EXPORTS
+// For existing code that uses old names
+// ===================================
+
+// Legacy exports (auto-generated from new system)
+export const SUBJECTS_ELEMENTARY = getSubjectsForAge('elementary');
+export const SUBJECTS_ADVANCED = getSubjectsForAge('teen');
+export const SUBJECT_CHECK_INS = Object.fromEntries(
+  Object.entries(SUBJECT_SYSTEM.subjects).map(([id, subject]) => [id, subject.checkIns])
+);
+export const SURPRISE_EVENTS = GAMIFICATION_CONFIG.surprises.events;
+export const MYSTERY_MONDAY_CHANGES = GAMIFICATION_CONFIG.mysteryMonday;
+export const SEASONAL_THEMES = GAMIFICATION_CONFIG.seasonal;
+
+// Colors system
+export const COLORS = {
+  primary: '#4A90E2',
+  success: '#27AE60',
+  warning: '#F39C12',
+  danger: '#E74C3C',
+  info: '#3498DB',
+  purple: '#9B59B6',
+  dark: '#2C3E50',
+  gray: '#7F8C8D',
+  lightGray: '#ECF0F1',
+  background: '#F0F8FF',
+};
+```
+
+---
+
+## study-buddy/src/screens/OnboardingScreen.js
+```javascript
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
+  Dimensions,
+  Alert
+} from 'react-native';
+import { Audio } from 'expo-av';
+import * as Speech from 'expo-speech';
+import { setStorageItem } from '../utils/storage';
+import { BUDDIES_BY_AGE } from '../assets/animations/buddy-animations';
+import { 
+  AGE_CONFIGS, 
+  getAgeConfig, 
+  getResponsiveValue, 
+  getScaledSize,
+  UI_SCALING_CONFIG,
+  TIMING_CONFIG
+} from '../utils/constants';
+
+const { width, height } = Dimensions.get('window');
+
+export default function OnboardingScreen({ navigation }) {
+  const [selectedAge, setSelectedAge] = useState(null);
+  const [selectedBuddy, setSelectedBuddy] = useState(null);
+  const [childName, setChildName] = useState('');
+  const [recording, setRecording] = useState(null);
+  const [step, setStep] = useState('chooseAge'); // chooseAge, chooseBuddy, recordName, ready
+
+  const selectAge = (ageGroup) => {
+    setSelectedAge(ageGroup);
+    setStep('chooseBuddy');
+  };
+
+  const selectBuddy = (buddy) => {
+    setSelectedBuddy(buddy);
+    const config = getAgeConfig(selectedAge);
+    
+    Speech.stop();
+    Speech.speak(`Great choice! I'm ${buddy.name} and I'm excited to study with you!`, {
+      language: 'en',
+      pitch: config.voicePitch,
+      rate: config.voiceRate
+    });
+    
+    setTimeout(() => setStep('recordName'), TIMING_CONFIG.animations.fadeIn * 4);
+  };
+
+  const startRecording = async () => {
+    try {
+      await Audio.requestPermissionsAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setRecording(recording);
+    } catch (err) {
+      Alert.alert('Oops!', 'Could not start recording. You can set this up later!');
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!recording) return;
+    
+    setRecording(null);
+    await recording.stopAndUnloadAsync();
+    const uri = recording.getURI();
+    
+    await setStorageItem('childNameRecording', uri);
+    setStep('ready');
+    
+    const config = getAgeConfig(selectedAge);
+    Speech.stop();
+    Speech.speak(config.completionMessage, {
+      language: 'en',
+      pitch: config.voicePitch,
+      rate: config.voiceRate
+    });
+  };
+
+  const completeOnboarding = async () => {
+    await setStorageItem('hasLaunched', 'true');
+    await setStorageItem('selectedAge', selectedAge);
+    await setStorageItem('selectedBuddy', JSON.stringify(selectedBuddy));
+    await setStorageItem('childName', childName || 'Buddy');
+    navigation.replace('ModeSelection');
+  };
+
+  const renderChooseAge = () => {
+    const ageGroups = Object.entries(AGE_CONFIGS);
+    
+    return (
+      <View style={styles.container}>
+        <Text style={[styles.title, getResponsiveStyles('title')]}>
+          How old is your study superstar?
+        </Text>
+        <Text style={[styles.subtitle, getResponsiveStyles('subtitle')]}>
+          We'll customize everything for their age!
+        </Text>
+        
+        <View style={styles.ageContainer}>
+          {ageGroups.map(([ageKey, config]) => (
+            <TouchableOpacity
+              key={ageKey}
+              style={[styles.ageCard, getAgeCardStyle(ageKey)]}
+              onPress={() => selectAge(ageKey)}
+            >
+              <Text style={[styles.ageEmoji, getResponsiveStyles('ageEmoji')]}>
+                {getAgeEmoji(ageKey)}
+              </Text>
+              <Text style={[styles.ageTitle, getResponsiveStyles('ageTitle')]}>
+                {getAgeTitle(ageKey)}
+              </Text>
+              <Text style={[styles.ageRange, getResponsiveStyles('ageRange')]}>
+                Ages {config.displayRange || config.ageRange}
+              </Text>
+              <Text style={[styles.ageDescription, getResponsiveStyles('ageDescription')]}>
+                {getAgeDescription(ageKey)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    );
+  };
+
+  const renderChooseBuddy = () => {
+    const buddies = BUDDIES_BY_AGE[selectedAge];
+    const config = getAgeConfig(selectedAge);
+    
+    return (
+      <View style={styles.container}>
+        <Text style={[styles.title, getResponsiveStyles('title')]}>
+          {config.buddySelectionTitle}
+        </Text>
+        <Text style={[styles.subtitle, getResponsiveStyles('subtitle')]}>
+          {config.buddySelectionSubtitle}
+        </Text>
+        
+        <View style={styles.buddyContainer}>
+          {buddies.map((buddy) => (
+            <TouchableOpacity
+              key={buddy.id}
+              style={[
+                styles.buddyCard, 
+                selectedBuddy?.id === buddy.id && styles.selectedBuddy,
+                getResponsiveStyles('buddyCard')
+              ]}
+              onPress={() => selectBuddy(buddy)}
+            >
+              <View style={[
+                styles.buddyAvatar, 
+                { backgroundColor: buddy.color },
+                getResponsiveStyles('buddyAvatar')
+              ]}>
+                <Text style={[styles.buddyEmoji, getResponsiveStyles('buddyEmoji')]}>
+                  {buddy.emoji}
+                </Text>
+              </View>
+              <Text style={[styles.buddyName, getResponsiveStyles('buddyName')]}>
+                {buddy.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    );
+  };
+
+  const renderRecordName = () => {
+    const config = getAgeConfig(selectedAge);
+    
+    return (
+      <View style={styles.container}>
+        <View style={[
+          styles.bigBuddyAvatar, 
+          { backgroundColor: selectedBuddy?.color },
+          getResponsiveStyles('bigBuddyAvatar')
+        ]}>
+          <Text style={[styles.bigBuddyEmoji, getResponsiveStyles('bigBuddyEmoji')]}>
+            {selectedBuddy?.emoji}
+          </Text>
+        </View>
+        
+        <Text style={[styles.title, getResponsiveStyles('title')]}>What's Your Name?</Text>
+        <Text style={[styles.subtitle, getResponsiveStyles('subtitle')]}>{config.namePrompt}</Text>
+        
+        <TouchableOpacity
+          style={[
+            styles.recordButton, 
+            recording && styles.recordingActive,
+            getResponsiveStyles('recordButton')
+          ]}
+          onPressIn={startRecording}
+          onPressOut={stopRecording}
+        >
+          <Text style={[styles.recordButtonText, getResponsiveStyles('recordButtonText')]}>
+            {recording ? '🎙️ Recording...' : '🎤 Hold to Record'}
+          </Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity style={styles.skipButton} onPress={() => setStep('ready')}>
+          <Text style={styles.skipText}>Skip for now</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  const renderReady = () => {
+    const config = getAgeConfig(selectedAge);
+    
+    return (
+      <View style={styles.container}>
+        <View style={[
+          styles.bigBuddyAvatar, 
+          { backgroundColor: selectedBuddy?.color },
+          getResponsiveStyles('bigBuddyAvatar')
+        ]}>
+          <Text style={[styles.bigBuddyEmoji, getResponsiveStyles('bigBuddyEmoji')]}>
+            {selectedBuddy?.emoji}
+          </Text>
+        </View>
+        
+        <Text style={[styles.title, getResponsiveStyles('title')]}>We're Ready!</Text>
+        <Text style={[styles.subtitle, getResponsiveStyles('subtitle')]}>
+          {selectedBuddy?.name} is {config.readyMessage}
+        </Text>
+        
+        <TouchableOpacity
+          style={[styles.startButton, getResponsiveStyles('startButton')]}
+          onPress={completeOnboarding}
+        >
+          <Text style={[styles.startButtonText, getResponsiveStyles('startButtonText')]}>
+            {config.startButtonText}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // Helper functions for age-specific content
+  const getAgeEmoji = (ageKey) => {
+    const emojis = { young: '🧸', elementary: '📚', tween: '🎮', teen: '💪' };
+    return emojis[ageKey] || '📚';
+  };
+
+  const getAgeTitle = (ageKey) => {
+    const titles = { young: 'Little Learner', elementary: 'Elementary', tween: 'Tween', teen: 'Teen' };
+    return titles[ageKey] || 'Elementary';
+  };
+
+  const getAgeDescription = (ageKey) => {
+    const descriptions = { 
+      young: 'Big celebrations, short sessions', 
+      elementary: 'Balanced support & fun',
+      tween: 'Cool & independent',
+      teen: 'Minimal & focused'
+    };
+    return descriptions[ageKey] || 'Balanced support & fun';
+  };
+
+  const getAgeCardStyle = (ageKey) => {
+    const config = getAgeConfig(ageKey);
+    return { borderColor: config.primaryColor, borderWidth: 2 };
+  };
+
+  const getResponsiveStyles = (component) => {
+    const scaling = selectedAge ? UI_SCALING_CONFIG.ageScaling[selectedAge] : UI_SCALING_CONFIG.ageScaling.elementary;
+    
+    return getResponsiveValue({
+      small: getComponentStyle(component, scaling, 0.9),
+      medium: getComponentStyle(component, scaling, 1.0),
+      large: getComponentStyle(component, scaling, 1.1),
+      xlarge: getComponentStyle(component, scaling, 1.2)
+    });
+  };
+
+  const getComponentStyle = (component, scaling, screenScale) => {
+    const baseStyles = {
+      title: { fontSize: 32 * scaling.fontSize * screenScale },
+      subtitle: { fontSize: 18 * scaling.fontSize * screenScale },
+      ageEmoji: { fontSize: 40 * scaling.iconSize * screenScale },
+      ageTitle: { fontSize: 18 * scaling.fontSize * screenScale },
+      ageRange: { fontSize: 14 * scaling.fontSize * screenScale },
+      ageDescription: { fontSize: 12 * scaling.fontSize * screenScale },
+      buddyCard: { padding: 15 * scaling.spacing * screenScale },
+      buddyAvatar: { 
+        width: 80 * scaling.buddySize * screenScale, 
+        height: 80 * scaling.buddySize * screenScale,
+        borderRadius: 40 * scaling.buddySize * screenScale 
+      },
+      buddyEmoji: { fontSize: 40 * scaling.iconSize * screenScale },
+      buddyName: { fontSize: 16 * scaling.fontSize * screenScale },
+      bigBuddyAvatar: { 
+        width: 150 * scaling.buddySize * screenScale, 
+        height: 150 * scaling.buddySize * screenScale,
+        borderRadius: 75 * scaling.buddySize * screenScale 
+      },
+      bigBuddyEmoji: { fontSize: 70 * scaling.iconSize * screenScale },
+      recordButton: { 
+        paddingHorizontal: 40 * scaling.spacing * screenScale,
+        paddingVertical: 20 * scaling.spacing * screenScale 
+      },
+      recordButtonText: { fontSize: 20 * scaling.fontSize * screenScale },
+      startButton: { 
+        paddingHorizontal: 60 * scaling.spacing * screenScale,
+        paddingVertical: 20 * scaling.spacing * screenScale 
+      },
+      startButtonText: { fontSize: 24 * scaling.fontSize * screenScale }
+    };
+    
+    return baseStyles[component] || {};
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      {step === 'chooseAge' && renderChooseAge()}
+      {step === 'chooseBuddy' && renderChooseBuddy()}
+      {step === 'recordName' && renderRecordName()}
+      {step === 'ready' && renderReady()}
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#F0F8FF',
+  },
+  container: {
+    flex: 1,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  title: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  subtitle: {
+    color: '#7F8C8D',
+    marginBottom: 40,
+    textAlign: 'center',
+  },
+  ageContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  ageCard: {
+    width: '45%',
+    margin: '2.5%',
+    padding: 20,
+    borderRadius: 20,
+    backgroundColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+    alignItems: 'center',
+  },
+  ageEmoji: {
+    marginBottom: 10,
+  },
+  ageTitle: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+    marginBottom: 5,
+  },
+  ageRange: {
+    color: '#7F8C8D',
+    marginBottom: 5,
+  },
+  ageDescription: {
+    color: '#95A5A6',
+    textAlign: 'center',
+  },
+  buddyContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+  },
+  buddyCard: {
+    alignItems: 'center',
+    borderRadius: 20,
+    backgroundColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  selectedBuddy: {
+    transform: [{ scale: 1.1 }],
+    borderWidth: 3,
+    borderColor: '#4A90E2',
+  },
+  buddyAvatar: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  buddyEmoji: {},
+  buddyName: {
+    fontWeight: '600',
+    color: '#2C3E50',
+  },
+  bigBuddyAvatar: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 40,
+  },
+  bigBuddyEmoji: {},
+  recordButton: {
+    backgroundColor: '#E74C3C',
+    borderRadius: 30,
+    marginTop: 20,
+  },
+  recordingActive: {
+    backgroundColor: '#C0392B',
+    transform: [{ scale: 1.05 }],
+  },
+  recordButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  skipButton: {
+    marginTop: 20,
+    padding: 10,
+  },
+  skipText: {
+    color: '#7F8C8D',
+    fontSize: 16,
+  },
+  startButton: {
+    backgroundColor: '#27AE60',
+    borderRadius: 30,
+    marginTop: 40,
+  },
+  startButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+});
+```
+
+---
+
+## study-buddy/src/screens/ModeSelectionScreen.js
+```javascript
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
+  Dimensions,
+  Modal
+} from 'react-native';
+import { getStorageItem } from '../utils/storage';
+import { 
+  getAgeConfig, 
+  getSubjectsForAge,
+  getResponsiveValue,
+  getScaledSize,
+  TIMING_CONFIG
+} from '../utils/constants';
+
+const { width } = Dimensions.get('window');
+
+export default function ModeSelectionScreen({ navigation }) {
+  const [ageGroup, setAgeGroup] = useState('elementary');
+  const [studyingCount, setStudyingCount] = useState(0);
+  const [streakCount, setStreakCount] = useState(0);
+  const [showSubjectModal, setShowSubjectModal] = useState(false);
+
+  useEffect(() => {
+    loadUserData();
+    setupLiveActivity();
+  }, []);
+
+  const loadUserData = async () => {
+    const age = await getStorageItem('selectedAge');
+    if (age) setAgeGroup(age);
+    
+    // Set initial "live" counts with realistic numbers
+    setStudyingCount(Math.floor(Math.random() * 500) + 800);
+    setStreakCount(Math.floor(Math.random() * 100) + 100);
+  };
+
+  const setupLiveActivity = () => {
+    // Simulate live activity updates using configured timing
+    const interval = setInterval(() => {
+      setStudyingCount(Math.floor(Math.random() * 500) + 800);
+      setStreakCount(Math.floor(Math.random() * 100) + 100);
+    }, TIMING_CONFIG.intervals.liveActivityUpdate * 1000);
+    
+    return () => clearInterval(interval);
+  };
+
+  const selectSubjectAndStart = (subject) => {
+    setShowSubjectModal(false);
+    navigation.navigate('Main', { selectedSubject: subject });
+  };
+
+  const config = getAgeConfig(ageGroup);
+
+  // Responsive sizing
+  const getResponsiveStyles = () => ({
+    title: getResponsiveValue({
+      small: { fontSize: getScaledSize(24, ageGroup, 'fontSize') },
+      medium: { fontSize: getScaledSize(28, ageGroup, 'fontSize') },
+      large: { fontSize: getScaledSize(32, ageGroup, 'fontSize') }
+    }),
+    modeCard: getResponsiveValue({
+      small: { width: '90%', padding: getScaledSize(15, ageGroup, 'spacing') },
+      medium: { width: '45%', padding: getScaledSize(20, ageGroup, 'spacing') },
+      large: { width: '40%', padding: getScaledSize(25, ageGroup, 'spacing') }
+    }),
+    modeEmoji: getResponsiveValue({
+      small: { fontSize: getScaledSize(40, ageGroup, 'iconSize') },
+      medium: { fontSize: getScaledSize(50, ageGroup, 'iconSize') },
+      large: { fontSize: getScaledSize(60, ageGroup, 'iconSize') }
+    })
+  });
+
+  const responsiveStyles = getResponsiveStyles();
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: config.secondaryColor || '#F0F8FF' }]}>
+      <View style={styles.container}>
+
+        {/* Title */}
+        <Text style={[styles.title, responsiveStyles.title, { color: config.primaryColor }]}>
+          How are you feeling?
+        </Text>
+
+        {/* Mode Selection */}
+        <View style={styles.modeContainer}>
+          <TouchableOpacity
+            style={[
+              styles.modeCard, 
+              responsiveStyles.modeCard,
+              styles.studyMode,
+              { borderColor: config.accentColor }
+            ]}
+            onPress={() => setShowSubjectModal(true)}
+          >
+            <Text style={[styles.modeEmoji, responsiveStyles.modeEmoji]}>📚</Text>
+            <Text style={[
+              styles.modeTitle, 
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize'), color: config.primaryColor }
+            ]}>
+              Ready to Work!
+            </Text>
+            <Text style={[
+              styles.modeDescription,
+              { fontSize: getScaledSize(12, ageGroup, 'fontSize') }
+            ]}>
+              {getModeDescription(ageGroup, 'study')}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.modeCard,
+              responsiveStyles.modeCard, 
+              styles.calmMode,
+              { borderColor: '#2196F3' }
+            ]}
+            onPress={() => navigation.navigate('CalmMode')}
+          >
+            <Text style={[styles.modeEmoji, responsiveStyles.modeEmoji]}>🧘</Text>
+            <Text style={[
+              styles.modeTitle,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize'), color: '#2196F3' }
+            ]}>
+              Need to Calm Down
+            </Text>
+            <Text style={[
+              styles.modeDescription,
+              { fontSize: getScaledSize(12, ageGroup, 'fontSize') }
+            ]}>
+              {getModeDescription(ageGroup, 'calm')}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Quick Stats */}
+        <View style={styles.statsPreview}>
+          <Text style={[
+            styles.statsText,
+            { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+          ]}>
+            Start quickly or pick a mode below.
+          </Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginTop: 10 }}>
+            {getQuickStarts(ageGroup).map((qs) => (
+              <TouchableOpacity
+                key={qs.id}
+                style={{
+                  backgroundColor: 'white',
+                  borderColor: config.accentColor,
+                  borderWidth: 2,
+                  borderRadius: 16,
+                  paddingHorizontal: getScaledSize(14, ageGroup, 'spacing'),
+                  paddingVertical: getScaledSize(8, ageGroup, 'spacing'),
+                  margin: 6,
+                }}
+                onPress={() => {
+                  const subject = getSubjectsForAge(ageGroup).find(s => s.id === qs.subjectId) || { id: 'other', label: 'Other' };
+                  navigation.navigate('Main', { selectedSubject: subject, quickStart: { workMinutes: qs.work, breakMinutes: qs.break } });
+                }}
+              >
+                <Text style={{ color: config.primaryColor, fontWeight: '600' }}>{qs.emoji} {qs.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </View>
+
+      {/* Subject Selection Modal */}
+      <Modal
+        visible={showSubjectModal}
+        transparent={true}
+        animationType="slide"
+      >
+        <View style={styles.modalContainer}>
+          <View style={[
+            styles.modalContent,
+            { padding: getScaledSize(30, ageGroup, 'spacing') }
+          ]}>
+            <Text style={[
+              styles.modalTitle,
+              { fontSize: getScaledSize(24, ageGroup, 'fontSize') }
+            ]}>
+              What subject are you working on?
+            </Text>
+            <View style={styles.subjectGrid}>
+              {getSubjectsForAge(ageGroup).map((subject) => (
+                <TouchableOpacity
+                  key={subject.id}
+                  style={[
+                    styles.subjectButton,
+                    { 
+                      padding: getScaledSize(20, ageGroup, 'spacing'),
+                      borderColor: config.accentColor 
+                    }
+                  ]}
+                  onPress={() => selectSubjectAndStart(subject)}
+                >
+                  <Text style={[
+                    styles.subjectEmoji,
+                    { fontSize: getScaledSize(32, ageGroup, 'iconSize') }
+                  ]}>
+                    {subject.emoji}
+                  </Text>
+                  <Text style={[
+                    styles.subjectLabel,
+                    { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+                  ]}>
+                    {subject.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            
+            <TouchableOpacity
+              style={[styles.closeButton, { backgroundColor: config.primaryColor }]}
+              onPress={() => setShowSubjectModal(false)}
+            >
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+    </SafeAreaView>
+  );
+}
+
+// Helper function for mode descriptions
+function getModeDescription(ageGroup, mode) {
+  const descriptions = {
+    study: {
+      young: 'Time to learn!',
+      elementary: 'Study time',
+      tween: 'Focus mode', 
+      teen: 'Work mode'
+    },
+    calm: {
+      young: 'Feel better',
+      elementary: 'Take a breath',
+      tween: 'Reset',
+      teen: 'Mindfulness'
+    }
+  };
+  
+  return descriptions[mode][ageGroup] || descriptions[mode].elementary;
+}
+
+// Quick Start presets by age group
+function getQuickStarts(ageGroup) {
+  const presets = {
+    young: [
+      { id: 'qs-math-10-3', subjectId: 'math', work: 10, break: 3, emoji: '🔢', label: 'Math 10 + 3' },
+      { id: 'qs-read-10-3', subjectId: 'reading', work: 10, break: 3, emoji: '📚', label: 'Read 10 + 3' }
+    ],
+    elementary: [
+      { id: 'qs-math-15-5', subjectId: 'math', work: 15, break: 5, emoji: '🔢', label: 'Math 15 + 5' },
+      { id: 'qs-read-15-5', subjectId: 'reading', work: 15, break: 5, emoji: '📚', label: 'Read 15 + 5' }
+    ],
+    tween: [
+      { id: 'qs-sci-20-5', subjectId: 'science', work: 20, break: 5, emoji: '🔬', label: 'Science 20 + 5' },
+      { id: 'qs-math-20-5', subjectId: 'math', work: 20, break: 5, emoji: '🔢', label: 'Math 20 + 5' }
+    ],
+    teen: [
+      { id: 'qs-write-25-5', subjectId: 'writing', work: 25, break: 5, emoji: '✏️', label: 'Write 25 + 5' },
+      { id: 'qs-chem-25-5', subjectId: 'chemistry', work: 25, break: 5, emoji: '⚗️', label: 'Chem 25 + 5' }
+    ]
+  };
+  return presets[ageGroup] || presets.elementary;
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
+  container: {
+    flex: 1,
+    padding: 20,
+    justifyContent: 'center',
+  },
+  liveActivity: {
+    position: 'absolute',
+    top: 50,
+    width: '100%',
+    alignItems: 'center',
+  },
+  liveText: {
+    color: '#7F8C8D',
+    marginBottom: 5,
+  },
+  title: {
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 40,
+  },
+  modeContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 40,
+    flexWrap: 'wrap',
+  },
+  modeCard: {
+    borderRadius: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+    backgroundColor: 'white',
+    marginBottom: 20,
+  },
+  studyMode: {
+    borderWidth: 2,
+  },
+  calmMode: {
+    borderWidth: 2,
+  },
+  modeEmoji: {
+    marginBottom: 15,
+  },
+  modeTitle: {
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  modeDescription: {
+    color: '#7F8C8D',
+    textAlign: 'center',
+  },
+  statsPreview: {
+    position: 'absolute',
+    bottom: 50,
+    width: '100%',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  statsText: {
+    color: '#95A5A6',
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    width: '90%',
+    maxWidth: 400,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  modalTitle: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+    marginBottom: 30,
+    textAlign: 'center',
+  },
+  subjectGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  subjectButton: {
+    backgroundColor: '#F0F8FF',
+    margin: 8,
+    borderRadius: 15,
+    alignItems: 'center',
+    minWidth: 100,
+    borderWidth: 2,
+  },
+  subjectEmoji: {
+    marginBottom: 8,
+  },
+  subjectLabel: {
+    fontWeight: '600',
+    color: '#2C3E50',
+  },
+  closeButton: {
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 20,
+    marginTop: 20,
+  },
+  closeButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+});
+```
+
+---
+
+## study-buddy/src/screens/MainScreen.js
+```javascript
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
+  Dimensions,
+  Alert,
+  AppState,
+  Modal
+} from 'react-native';
+import * as Speech from 'expo-speech';
+import * as Haptics from 'expo-haptics';
+import { Camera } from 'expo-camera';
+import * as Notifications from 'expo-notifications';
+import { getStorageItem, setStorageItem } from '../utils/storage';
+import { smartSpeak, stopSpeech } from '../utils/speech';
+import BuddyCharacter from '../components/BuddyCharacter';
+import StudyTimer from '../components/StudyTimer';
+import CheckInMessage from '../components/CheckInMessage';
+import BigButton from '../components/BigButton';
+import { 
+  getAgeConfig,
+  getSubjectsForAge,
+  getSubjectCheckIns,
+  shouldTriggerSurprise,
+  getRandomSurpriseEvent,
+  getMysteryMondayChange,
+  getCurrentSeasonalTheme,
+  getScaledSize,
+  TIMING_CONFIG
+} from '../utils/constants';
+
+const { width, height } = Dimensions.get('window');
+
+export default function MainScreen({ navigation, route }) {
+  const [buddy, setBuddy] = useState(null);
+  const [ageGroup, setAgeGroup] = useState('elementary');
+  const [isStudying, setIsStudying] = useState(false);
+  const [sessionTime, setSessionTime] = useState(0);
+  const [totalFocusTime, setTotalFocusTime] = useState(0);
+  const [checkInMessage, setCheckInMessage] = useState('');
+  const [showCheckIn, setShowCheckIn] = useState(false);
+  const [currentStreak, setCurrentStreak] = useState(0);
+  const [buddyFaded, setBuddyFaded] = useState(false);
+  const [workPhoto, setWorkPhoto] = useState(null);
+  const [showProofMode, setShowProofMode] = useState(false);
+  const [showInteractionModal, setShowInteractionModal] = useState(false);
+  const [currentQuestion, setCurrentQuestion] = useState(null);
+  const [sessionLog, setSessionLog] = useState([]);
+  const [currentSubject, setCurrentSubject] = useState(null);
+  const [currentSurprise, setCurrentSurprise] = useState(null);
+  const [showParentGate, setShowParentGate] = useState(false);
+  const [parentAnswerInput, setParentAnswerInput] = useState('');
+  const [parentGateQA, setParentGateQA] = useState({ question: '', answer: '' });
+  const [wrongAttempts, setWrongAttempts] = useState(0);
+  const [gateLockedUntil, setGateLockedUntil] = useState(0);
+  const [longPressReady, setLongPressReady] = useState(false);
+  const quickStart = route.params?.quickStart || null;
+  
+  const timerInterval = useRef(null);
+  const checkInInterval = useRef(null);
+  const interactionInterval = useRef(null);
+  const fadeTimeout = useRef(null);
+  const startTimeRef = useRef(null);
+  const appState = useRef(AppState.currentState);
+  const cameraRef = useRef(null);
+  const scheduledNotifications = useRef([]);
+
+  useEffect(() => {
+    loadUserData();
+    loadSessionData();
+    
+    // Get selected subject from navigation if available
+    if (route.params?.selectedSubject) {
+      setCurrentSubject(route.params.selectedSubject);
+      startStudyingWithSubject(route.params.selectedSubject);
+    }
+    
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => {
+      clearAllIntervals();
+      subscription?.remove();
+    };
+  }, []);
+
+  const clearAllIntervals = () => {
+    [timerInterval, checkInInterval, interactionInterval, fadeTimeout].forEach(ref => {
+      if (ref.current) {
+        clearInterval(ref.current);
+        clearTimeout(ref.current);
+      }
+    });
+  };
+
+  const handleAppStateChange = (nextAppState) => {
+    if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+      if (isStudying) {
+        showEncouragement();
+        cancelScheduledCheckIns();
+      }
+      checkNotificationAction();
+    }
+    if (nextAppState.match(/inactive|background/) && isStudying) {
+      scheduleBackgroundCheckIns();
+    }
+    appState.current = nextAppState;
+  };
+
+  const checkNotificationAction = async () => {
+    const action = await getStorageItem('lastNotifAction');
+    if (!action) return;
+    await setStorageItem('lastNotifAction', '');
+    if (action === 'RESUME') {
+      if (!isStudying) {
+        const fallbackSubject = currentSubject || getSubjectsForAge(ageGroup)[0] || { id: 'other', label: 'Other' };
+        startStudyingWithSubject(fallbackSubject);
+      }
+    } else if (action === 'BREAK') {
+      takeBreak();
+    } else if (action === 'DONE') {
+      endSession();
+    }
+  };
+
+  const loadUserData = async () => {
+    const buddyData = await getStorageItem('selectedBuddy');
+    const age = await getStorageItem('selectedAge');
+    if (buddyData) setBuddy(JSON.parse(buddyData));
+    if (age) setAgeGroup(age);
+  };
+
+  const loadSessionData = async () => {
+    const streak = await getStorageItem('currentStreak');
+    const totalTime = await getStorageItem('totalFocusTime');
+    if (streak) setCurrentStreak(parseInt(streak));
+    if (totalTime) setTotalFocusTime(parseInt(totalTime));
+  };
+
+  const startStudyingWithSubject = (subject) => {
+    setCurrentSubject(subject);
+    setIsStudying(true);
+    setSessionTime(0);
+    setBuddyFaded(false);
+    setSessionLog([]);
+    startTimeRef.current = Date.now();
+    
+    const config = getAgeConfig(ageGroup);
+    // Apply quick start overrides if present
+    if (quickStart) {
+      if (quickStart.workMinutes) {
+        config.sessionLength = quickStart.workMinutes * 60;
+      }
+      if (quickStart.breakMinutes) {
+        config.breakDuration = quickStart.breakMinutes * 60;
+      }
+    }
+    
+    // Check for special events
+    checkForSpecialEvents();
+    
+    // Setup all timers using configured values
+    setupSessionTimers(config);
+    
+    // Initial encouragement
+    smartSpeak(`Let's work on ${subject.label}! ${config.startMessage}`, {
+      screenType: 'main',
+      language: 'en'
+    });
+    
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const setupSessionTimers = (config) => {
+    // Main timer - compute elapsed to reduce drift
+    timerInterval.current = setInterval(() => {
+      if (startTimeRef.current) {
+        const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+        setSessionTime(elapsed);
+      }
+    }, 1000);
+    
+    // Voice check-ins using config frequency
+    const checkInTime = config.checkInFrequency * 60 * 1000;
+    checkInInterval.current = setInterval(() => {
+      if (shouldTriggerSurprise()) {
+        showSurpriseEvent();
+      } else {
+        showCheckInMessage();
+      }
+    }, checkInTime);
+    
+    // Two-way interaction using config frequency
+    const interactionTime = config.interactionFrequency * 60 * 1000;
+    interactionInterval.current = setInterval(() => {
+      showInteractionPrompt();
+    }, interactionTime);
+    
+    // Buddy fade using configured delay
+    fadeTimeout.current = setTimeout(() => {
+      setBuddyFaded(true);
+    }, TIMING_CONFIG.session.buddyFadeDelay);
+  };
+
+  const scheduleBackgroundCheckIns = async () => {
+    try {
+      const config = getAgeConfig(ageGroup);
+      const intervalMs = config.checkInFrequency * 60 * 1000;
+      const messages = currentSubject ? getSubjectCheckIns(currentSubject.id) : getAgeConfig(ageGroup).checkInMessages;
+      // Schedule next 3 check-ins
+      const toSchedule = [1, 2, 3].map(i => ({
+        content: {
+          title: 'Study Buddy',
+          body: messages[Math.floor(Math.random() * messages.length)].replace(/[^\w\s]/g, ''),
+          categoryIdentifier: 'checkin-actions',
+        },
+        trigger: { seconds: Math.max(5, Math.floor((intervalMs * i) / 1000)) },
+      }));
+      const ids = [];
+      for (const n of toSchedule) {
+        const id = await Notifications.scheduleNotificationAsync({ content: n.content, trigger: n.trigger });
+        ids.push(id);
+      }
+      scheduledNotifications.current = ids;
+    } catch (e) {
+      // no-op
+    }
+  };
+
+  const cancelScheduledCheckIns = async () => {
+    try {
+      for (const id of scheduledNotifications.current) {
+        await Notifications.cancelScheduledNotificationAsync(id);
+      }
+      scheduledNotifications.current = [];
+    } catch (e) {
+      // no-op
+    }
+  };
+
+  const checkForSpecialEvents = () => {
+    // Mystery Monday check
+    const mysteryChange = getMysteryMondayChange();
+    if (mysteryChange) {
+      Alert.alert('Mystery Monday! 🎭', mysteryChange);
+      setCurrentSurprise({ emoji: '🎭', message: mysteryChange });
+    }
+    
+    // Seasonal theme check
+    const seasonalTheme = getCurrentSeasonalTheme();
+    if (seasonalTheme) {
+      console.log(`Seasonal theme: ${seasonalTheme.name} ${seasonalTheme.emoji}`);
+    }
+  };
+
+  const showSurpriseEvent = () => {
+    const surprise = getRandomSurpriseEvent();
+    setCurrentSurprise(surprise);
+    
+    Alert.alert(
+      `${surprise.emoji} Surprise!`,
+      surprise.message,
+      [{ text: 'Awesome!', style: 'default' }]
+    );
+    
+    const config = getAgeConfig(ageGroup);
+    Speech.stop();
+    Speech.speak(surprise.message, {
+      language: 'en',
+      pitch: config.voicePitch + 0.1, // Slightly higher for excitement
+      rate: config.voiceRate
+    });
+    
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const showCheckInMessage = () => {
+    const config = getAgeConfig(ageGroup);
+    
+    // Use subject-specific messages if available, otherwise age-appropriate messages
+    let messages;
+    if (currentSubject) {
+      messages = getSubjectCheckIns(currentSubject.id);
+    } else {
+      messages = config.checkInMessages;
+    }
+    
+    const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+    setCheckInMessage(randomMessage);
+    setShowCheckIn(true);
+    
+    // Temporarily show buddy, then fade again
+    setBuddyFaded(false);
+    setTimeout(() => setBuddyFaded(true), TIMING_CONFIG.session.checkInDisplay);
+    
+    Speech.stop();
+    Speech.speak(randomMessage.replace(/[^\w\s]/gi, ''), {
+      language: 'en',
+      pitch: config.voicePitch,
+      rate: config.voiceRate
+    });
+    
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    
+    setTimeout(() => setShowCheckIn(false), TIMING_CONFIG.session.checkInDisplay);
+  };
+
+  const showInteractionPrompt = () => {
+    const questions = getInteractionQuestions();
+    const randomQuestion = questions[Math.floor(Math.random() * questions.length)];
+    setCurrentQuestion(randomQuestion);
+    setShowInteractionModal(true);
+    
+    // Auto-pause if no response using configured timeout
+    setTimeout(() => {
+      if (showInteractionModal) {
+        pauseSession();
+        Alert.alert('Timer Paused', 'Tap to continue when ready!');
+      }
+    }, TIMING_CONFIG.session.modalTimeout);
+    
+    const config = getAgeConfig(ageGroup);
+    Speech.stop();
+    Speech.speak(randomQuestion.text, {
+      language: 'en',
+      pitch: config.voicePitch,
+      rate: config.voiceRate
+    });
+  };
+
+  const getInteractionQuestions = () => {
+    // Dynamic questions based on current subject
+    const baseQuestions = [
+      {
+        id: 'subject',
+        text: 'What are you working on?',
+        options: getSubjectsForAge(ageGroup).slice(0, 4).map(subject => ({
+          label: `${subject.emoji} ${subject.label}`,
+          value: subject.id
+        }))
+      },
+      {
+        id: 'progress',
+        text: 'How much have you finished?',
+        options: [
+          { label: 'All done! ✅', value: 'complete' },
+          { label: 'Most 🔵', value: 'most' },
+          { label: 'Half 🟡', value: 'half' },
+          { label: 'Just started 🔴', value: 'started' }
+        ]
+      },
+      {
+        id: 'difficulty',
+        text: "How's it going?",
+        options: [
+          { label: 'Easy! 😊', value: 'easy' },
+          { label: 'OK 😐', value: 'ok' },
+          { label: 'Hard 😟', value: 'hard' },
+          { label: 'Need help 🆘', value: 'help' }
+        ]
+      }
+    ];
+    
+    return baseQuestions;
+  };
+
+  const handleInteractionResponse = (response) => {
+    const logEntry = {
+      time: sessionTime,
+      question: currentQuestion.id,
+      response: response.value,
+      timestamp: new Date().toISOString()
+    };
+    
+    setSessionLog([...sessionLog, logEntry]);
+    setShowInteractionModal(false);
+    
+    // Handle special responses
+    if (response.value === 'help') {
+      handleHelpRequest();
+    } else {
+      provideFeedback(response.value);
+    }
+  };
+
+  const handleHelpRequest = () => {
+    Alert.alert(
+      'Need Help?',
+      'Should I let your parent know?',
+      [
+        { text: 'No, I\'ll keep trying', style: 'cancel' },
+        { text: 'Yes please', onPress: () => {
+          Alert.alert('Help is on the way!', 'Keep trying, someone will check on you soon.');
+        }}
+      ]
+    );
+  };
+
+  const provideFeedback = (responseValue) => {
+    const encouragements = {
+      easy: "Great! Keep crushing it!",
+      ok: "Nice steady progress!",
+      hard: "You're doing great even though it's tough!",
+      complete: "Amazing! You finished!",
+      most: "Almost there, fantastic!",
+      half: "Halfway is great progress!",
+      started: "Good start, keep going!"
+    };
+    
+    if (encouragements[responseValue]) {
+      const config = getAgeConfig(ageGroup);
+      Speech.stop();
+      Speech.speak(encouragements[responseValue], {
+        language: 'en',
+        pitch: config.voicePitch,
+        rate: config.voiceRate
+      });
+    }
+  };
+
+  const pauseSession = () => {
+    clearAllIntervals();
+    setIsStudying(false);
+  };
+
+  const takeBreak = () => {
+    const config = getAgeConfig(ageGroup);
+    
+    Alert.alert(
+      config.breakTitle,
+      config.breakMessage,
+      [
+        {
+          text: "Start Break",
+          onPress: () => {
+            pauseSession();
+            saveSessionData();
+            
+            // Resume after configured break duration
+            setTimeout(() => {
+              Alert.alert(
+                "Break's Over!",
+                "Ready to get back to work?",
+                [
+                  { text: "5 More Minutes", style: "cancel" },
+                  { text: config.resumeButtonText, onPress: () => startStudyingWithSubject(currentSubject) }
+                ]
+              );
+            }, config.breakDuration * 1000); // Already in seconds from config
+          }
+        },
+        {
+          text: "Keep Working",
+          style: "cancel"
+        }
+      ]
+    );
+  };
+
+  const takeWorkPhoto = async () => {
+    const { status } = await Camera.requestCameraPermissionsAsync();
+    if (status === 'granted') {
+      setShowProofMode(true);
+    } else {
+      Alert.alert('Camera Permission', 'We need camera access for one photo of your work (optional)');
+    }
+  };
+
+  const capturePhoto = async () => {
+    if (cameraRef.current) {
+      const photo = await cameraRef.current.takePictureAsync();
+      setWorkPhoto(photo.uri);
+      setShowProofMode(false);
+      await setStorageItem('lastWorkPhoto', photo.uri);
+      Alert.alert('Great Work!', 'Your completed homework has been saved!');
+    }
+  };
+
+  const endSession = () => {
+    const config = getAgeConfig(ageGroup);
+    
+    // Offer photo for older kids
+    if (['tween', 'teen'].includes(ageGroup)) {
+      Alert.alert(
+        'Show Your Work!',
+        'Take a photo of your completed homework?',
+        [
+          { text: 'Skip', onPress: () => completeSession() },
+          { text: 'Take Photo', onPress: () => {
+            takeWorkPhoto();
+            completeSession();
+          }}
+        ]
+      );
+    } else {
+      completeSession();
+    }
+  };
+
+  const completeSession = () => {
+    pauseSession();
+    saveSessionData();
+    
+    navigation.navigate('Celebration', {
+      sessionTime: sessionTime,
+      totalTime: totalFocusTime + sessionTime,
+      streak: currentStreak + 1,
+      ageGroup: ageGroup,
+      workPhoto: workPhoto,
+      sessionLog: sessionLog
+    });
+  };
+
+  const saveSessionData = async () => {
+    const newTotalTime = totalFocusTime + sessionTime;
+    const newStreak = currentStreak + 1;
+    
+    // Save all session data
+    const savePromises = [
+      setStorageItem('totalFocusTime', newTotalTime.toString()),
+      setStorageItem('currentStreak', newStreak.toString()),
+      setStorageItem('lastSessionDate', new Date().toISOString()),
+      setStorageItem('lastSessionLog', JSON.stringify(sessionLog))
+    ];
+    
+    await Promise.all(savePromises);
+    
+    setTotalFocusTime(newTotalTime);
+    setCurrentStreak(newStreak);
+  };
+
+  const showEncouragement = () => {
+    const config = getAgeConfig(ageGroup);
+    Speech.stop();
+    Speech.speak(config.welcomeBackMessage, {
+      language: 'en',
+      pitch: config.voicePitch,
+      rate: config.voiceRate
+    });
+  };
+
+  const openParentSettings = () => {
+    // Check if gate is locked
+    const now = Date.now();
+    if (now < gateLockedUntil) {
+      const remainingSeconds = Math.ceil((gateLockedUntil - now) / 1000);
+      Alert.alert('Please Wait', `Parent gate is locked for ${remainingSeconds} more seconds`);
+      return;
+    }
+    
+    // Generate new gate question
+    const newGate = generateParentGate(getAgeConfig(ageGroup));
+    setParentGateQA(newGate);
+    setParentAnswerInput('');
+    setLongPressReady(false);
+    setShowParentGate(true);
+  };
+
+  // Camera mode render
+  if (showProofMode) {
+    return (
+      <Camera style={styles.camera} ref={cameraRef}>
+        <View style={styles.cameraContainer}>
+          <Text style={[
+            styles.cameraText,
+            { fontSize: getScaledSize(24, ageGroup, 'fontSize') }
+          ]}>
+            Show your completed work!
+          </Text>
+          <TouchableOpacity 
+            style={[
+              styles.captureButton,
+              { 
+                width: getScaledSize(70, ageGroup, 'buttonScale'),
+                height: getScaledSize(70, ageGroup, 'buttonScale'),
+                borderRadius: getScaledSize(35, ageGroup, 'buttonScale')
+              }
+            ]} 
+            onPress={capturePhoto}
+          >
+            <Text style={[
+              styles.captureButtonText,
+              { fontSize: getScaledSize(40, ageGroup, 'iconSize') }
+            ]}>
+              📸
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </Camera>
+    );
+  }
+
+  const config = getAgeConfig(ageGroup);
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: config.secondaryColor || '#F0F8FF' }]}>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={openParentSettings} style={styles.settingsButton}>
+            <Text style={[
+              styles.settingsIcon,
+              { fontSize: getScaledSize(24, ageGroup, 'iconSize') }
+            ]}>
+              ⚙️
+            </Text>
+          </TouchableOpacity>
+          <View style={[
+            styles.streakContainer,
+            { backgroundColor: config.theme?.accent || '#FFF3CD' }
+          ]}>
+            <Text style={[
+              styles.streakText,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              🔥 {currentStreak} {config.streakLabel}
+            </Text>
+          </View>
+        </View>
+
+        <BuddyCharacter 
+          buddy={buddy} 
+          isStudying={isStudying}
+          isFaded={buddyFaded}
+          ageGroup={ageGroup}
+          style={styles.buddyContainer}
+        />
+
+        {showCheckIn && (
+          <CheckInMessage message={checkInMessage} ageGroup={ageGroup} />
+        )}
+
+        {isStudying && (
+          <StudyTimer seconds={sessionTime} ageGroup={ageGroup} />
+        )}
+
+        <View style={[
+          styles.buttonContainer,
+          { paddingVertical: getScaledSize(30, ageGroup, 'spacing') }
+        ]}>
+          {!isStudying ? (
+            <BigButton 
+              title={config.startButtonText}
+              onPress={() => navigation.navigate('ModeSelection')}
+              color={config.primaryColor}
+              ageGroup={ageGroup}
+            />
+          ) : (
+            <>
+              <BigButton 
+                title={config.breakButtonText}
+                onPress={takeBreak}
+                color="#F39C12"
+                ageGroup={ageGroup}
+              />
+              <BigButton 
+                title={config.endButtonText}
+                onPress={endSession}
+                color="#E74C3C"
+                ageGroup={ageGroup}
+                style={{ marginTop: getScaledSize(20, ageGroup, 'spacing') }}
+              />
+            </>
+          )}
+        </View>
+
+        <View style={styles.statsContainer}>
+          <Text style={[
+            styles.statsText,
+            { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+          ]}>
+            {config.statsLabel}: {Math.floor(totalFocusTime / 60)} minutes
+          </Text>
+        </View>
+      </View>
+
+      {/* Two-Way Interaction Modal */}
+      <Modal
+        visible={showInteractionModal}
+        transparent={true}
+        animationType="slide"
+      >
+        <View style={styles.modalContainer}>
+          <View style={[
+            styles.modalContent,
+            { padding: getScaledSize(30, ageGroup, 'spacing') }
+          ]}>
+            <Text style={[
+              styles.modalTitle,
+              { fontSize: getScaledSize(24, ageGroup, 'fontSize') }
+            ]}>
+              {currentQuestion?.text}
+            </Text>
+            <View style={styles.optionsContainer}>
+              {currentQuestion?.options.map((option) => (
+                <TouchableOpacity
+                  key={option.value}
+                  style={[
+                    styles.optionButton,
+                    { 
+                      paddingVertical: getScaledSize(15, ageGroup, 'spacing'),
+                      paddingHorizontal: getScaledSize(25, ageGroup, 'spacing'),
+                      borderColor: config.accentColor 
+                    }
+                  ]}
+                  onPress={() => handleInteractionResponse(option)}
+                >
+                  <Text style={[
+                    styles.optionText,
+                    { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+                  ]}>
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Surprise Event Display */}
+      {currentSurprise && (
+        <View style={[
+          styles.surpriseBanner,
+          { 
+            padding: getScaledSize(15, ageGroup, 'spacing'),
+            top: getScaledSize(100, ageGroup, 'spacing') 
+          }
+        ]}>
+          <Text style={[
+            styles.surpriseText,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            {currentSurprise.emoji} {currentSurprise.message}
+          </Text>
+        </View>
+      )}
+
+      {/* Parent Gate Modal */}
+      <Modal
+        visible={showParentGate}
+        transparent={true}
+        animationType="fade"
+      >
+        <View style={styles.modalContainer}>
+          <View style={[styles.modalContent, { padding: getScaledSize(30, ageGroup, 'spacing') }]}>
+            <Text style={[styles.modalTitle, { fontSize: getScaledSize(20, ageGroup, 'fontSize') }]}>Parent Access</Text>
+            
+            {/* Long Press Instruction */}
+            {!longPressReady && (
+              <TouchableOpacity
+                onLongPress={() => {
+                  setLongPressReady(true);
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                }}
+                delayLongPress={1500}
+                style={{
+                  backgroundColor: '#E8F4FF',
+                  padding: 15,
+                  borderRadius: 10,
+                  marginBottom: 15
+                }}
+              >
+                <Text style={{ textAlign: 'center', color: '#4A90E2' }}>
+                  Hold this box for 2 seconds to continue
+                </Text>
+              </TouchableOpacity>
+            )}
+            
+            {/* Question and Input */}
+            {longPressReady && (
+              <>
+                <Text style={{ marginBottom: 10 }}>{parentGateQA.question}</Text>
+                <TextInput
+                  keyboardType="number-pad"
+                  value={parentAnswerInput}
+                  onChangeText={setParentAnswerInput}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: '#ccc',
+                    borderRadius: 8,
+                    padding: 10,
+                    width: '80%',
+                    alignSelf: 'center',
+                    textAlign: 'center'
+                  }}
+                />
+                <View style={{ flexDirection: 'row', marginTop: 15, justifyContent: 'center' }}>
+                  <TouchableOpacity
+                    style={[styles.optionButton, { paddingHorizontal: 20, paddingVertical: 10, marginRight: 10 }]}
+                    onPress={() => {
+                      setShowParentGate(false);
+                      setWrongAttempts(0);
+                    }}
+                  >
+                    <Text>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.optionButton, { paddingHorizontal: 20, paddingVertical: 10 }]}
+                    onPress={() => {
+                      if (parentAnswerInput.trim() === parentGateQA.answer) {
+                        setShowParentGate(false);
+                        setWrongAttempts(0);
+                        navigation.navigate('ParentSettings', { sessionLog });
+                      } else {
+                        const attempts = wrongAttempts + 1;
+                        setWrongAttempts(attempts);
+                        
+                        if (attempts >= 3) {
+                          // Lock gate for 30 seconds after 3 wrong attempts
+                          setGateLockedUntil(Date.now() + 30000);
+                          setShowParentGate(false);
+                          setWrongAttempts(0);
+                          Alert.alert('Gate Locked', 'Too many wrong attempts. Please wait 30 seconds.');
+                        } else {
+                          Alert.alert('Try again', `Incorrect answer. ${3 - attempts} attempts remaining.`);
+                          setParentAnswerInput('');
+                        }
+                      }
+                    }}
+                  >
+                    <Text>Submit</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
+  container: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  settingsButton: {
+    padding: 10,
+  },
+  settingsIcon: {},
+  streakContainer: {
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  streakText: {
+    fontWeight: 'bold',
+    color: '#856404',
+  },
+  buddyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  buttonContainer: {},
+  statsContainer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  statsText: {
+    color: '#7F8C8D',
+  },
+  camera: {
+    flex: 1,
+  },
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingBottom: 50,
+  },
+  cameraText: {
+    fontWeight: 'bold',
+    color: 'white',
+    marginBottom: 30,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: -1, height: 1 },
+    textShadowRadius: 10,
+  },
+  captureButton: {
+    backgroundColor: 'white',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  captureButtonText: {},
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    width: '90%',
+    maxWidth: 400,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  modalTitle: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+    marginBottom: 30,
+    textAlign: 'center',
+  },
+  optionsContainer: {
+    width: '100%',
+  },
+  optionButton: {
+    backgroundColor: '#F0F8FF',
+    borderRadius: 15,
+    marginBottom: 12,
+    borderWidth: 2,
+  },
+  optionText: {
+    fontWeight: '600',
+    color: '#2C3E50',
+    textAlign: 'center',
+  },
+  surpriseBanner: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    backgroundColor: '#FFD700',
+    borderRadius: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  surpriseText: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+  },
+});
+```
+
+---
+
+## study-buddy/src/screens/CalmModeScreen.js
+```javascript
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
+  Dimensions,
+  Alert,
+  Animated
+} from 'react-native';
+import * as Speech from 'expo-speech';
+import * as Haptics from 'expo-haptics';
+import { getStorageItem, setStorageItem } from '../utils/storage';
+import BuddyCharacter from '../components/BuddyCharacter';
+import BigButton from '../components/BigButton';
+import { 
+  getAgeConfig, 
+  getScaledSize,
+  TIMING_CONFIG
+} from '../utils/constants';
+
+const { width, height } = Dimensions.get('window');
+
+export default function CalmModeScreen({ navigation }) {
+  const [buddy, setBuddy] = useState(null);
+  const [ageGroup, setAgeGroup] = useState('elementary');
+  const [isCalming, setIsCalming] = useState(false);
+  const [sessionTime, setSessionTime] = useState(0);
+  const [breathCount, setBreathCount] = useState(0);
+  const [calmStreak, setCalmStreak] = useState(0);
+  
+  const breathingAnim = useRef(new Animated.Value(1)).current;
+  const [isInhale, setIsInhale] = useState(true);
+  const timerInterval = useRef(null);
+  const breathingInterval = useRef(null);
+
+  useEffect(() => {
+    loadUserData();
+    loadCalmData();
+    
+    return () => {
+      if (timerInterval.current) clearInterval(timerInterval.current);
+      if (breathingInterval.current) clearInterval(breathingInterval.current);
+    };
+  }, []);
+
+  const loadUserData = async () => {
+    const buddyData = await getStorageItem('selectedBuddy');
+    const age = await getStorageItem('selectedAge');
+    if (buddyData) setBuddy(JSON.parse(buddyData));
+    if (age) setAgeGroup(age);
+  };
+
+  const loadCalmData = async () => {
+    const streak = await getStorageItem('calmStreak');
+    if (streak) setCalmStreak(parseInt(streak));
+  };
+
+  const startCalming = () => {
+    setIsCalming(true);
+    setSessionTime(0);
+    setBreathCount(0);
+    
+    const config = getAgeConfig(ageGroup);
+    
+    // Start timer - minimum 5 minutes
+    timerInterval.current = setInterval(() => {
+      setSessionTime(prev => {
+        if (prev >= 300) { // 5 minutes minimum
+          offerToFinish();
+        }
+        return prev + 1;
+      });
+    }, 1000);
+    
+    // Start breathing exercise with configured timing
+    startBreathingExercise();
+    
+    // Initial calming message based on age
+    const calmMessage = getCalmingMessage(config);
+    Speech.speak(calmMessage, {
+      language: 'en',
+      pitch: config.voicePitch - 0.2, // Lower pitch for calming
+      rate: config.voiceRate - 0.1   // Slower rate for calming
+    });
+    
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const getCalmingMessage = (config) => {
+    const messages = {
+      young: "Let's take some big breaths together. You're safe.",
+      elementary: "Time to calm down. Breathe with me.",
+      tween: "Let's reset. Deep breaths.",
+      teen: "Breathing exercise. Follow the circle."
+    };
+    return messages[ageGroup] || messages.elementary;
+  };
+
+  const startBreathingExercise = () => {
+    breathingInterval.current = setInterval(() => {
+      // Breathe in and out cycle using configured timing
+      Animated.sequence([
+        Animated.timing(breathingAnim, {
+          toValue: 1.5,
+          duration: TIMING_CONFIG.animations.breathingIn,
+          useNativeDriver: true,
+        }),
+        Animated.timing(breathingAnim, {
+          toValue: 1,
+          duration: TIMING_CONFIG.animations.breathingOut,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setIsInhale(prev => !prev);
+      });
+      
+      setBreathCount(prev => prev + 1);
+      
+      // Voice guidance every 3 breaths
+      if ((breathCount + 1) % 3 === 0) {
+        const prompts = getBreathingPrompts(ageGroup);
+        const config = getAgeConfig(ageGroup);
+        Speech.stop();
+        Speech.speak(prompts[(breathCount + 1) % prompts.length], {
+          pitch: config.voicePitch - 0.2,
+          rate: config.voiceRate - 0.3
+        });
+      }
+    }, TIMING_CONFIG.session.breathingCycle);
+  };
+
+  const getBreathingPrompts = (ageGroup) => {
+    const prompts = {
+      young: ["Big breath in... and out...", "You're doing great", "Nice and slow", "Feel better"],
+      elementary: ["In... and out...", "You're doing great", "Nice and slow", "Feel calmer"],
+      tween: ["Breathe in... breathe out...", "Good", "Stay calm", "Reset"],
+      teen: ["In... out...", "Focus", "Steady", "Center"]
+    };
+    return prompts[ageGroup] || prompts.elementary;
+  };
+
+  const offerToFinish = () => {
+    Alert.alert(
+      "Feeling Better?",
+      "You've been calming for 5 minutes. Ready to stop?",
+      [
+        { text: "Keep Going", style: "cancel" },
+        { text: "I'm Ready", onPress: finishCalming }
+      ]
+    );
+  };
+
+  const finishCalming = () => {
+    setIsCalming(false);
+    clearInterval(timerInterval.current);
+    clearInterval(breathingInterval.current);
+    
+    saveCalmData();
+    
+    const finishMessage = getFinishMessage(ageGroup);
+    Alert.alert(
+      "Great Job! 🌟",
+      finishMessage,
+      [
+        { text: "Not Yet", onPress: () => navigation.navigate('ModeSelection') },
+        { 
+          text: "Tell Parent", 
+          onPress: () => {
+            Alert.alert("Message Sent!", "Someone will check on you soon.");
+            navigation.navigate('ModeSelection');
+          }
+        }
+      ]
+    );
+  };
+
+  const getFinishMessage = (ageGroup) => {
+    const messages = {
+      young: "You did amazing at calming down! Want to tell someone you're ready?",
+      elementary: "You did great at calming down. Want to tell someone you're ready?",
+      tween: "Good work calming down. Want to let someone know you're ready?",
+      teen: "Well done. Ready to tell someone you're good?"
+    };
+    return messages[ageGroup] || messages.elementary;
+  };
+
+  const saveCalmData = async () => {
+    const newStreak = calmStreak + 1;
+    const calmLog = {
+      duration: sessionTime,
+      breathCount: breathCount,
+      timestamp: new Date().toISOString()
+    };
+    
+    await Promise.all([
+      setStorageItem('calmStreak', newStreak.toString()),
+      setStorageItem('lastCalmSession', new Date().toISOString()),
+      setStorageItem('lastCalmLog', JSON.stringify(calmLog))
+    ]);
+  };
+
+  const config = getAgeConfig(ageGroup);
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: config.theme?.background || '#E8F4F8' }]}>
+      <View style={styles.container}>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Text style={[
+              styles.backText,
+              { fontSize: getScaledSize(24, ageGroup, 'fontSize') }
+            ]}>
+              ←
+            </Text>
+          </TouchableOpacity>
+          <View style={[
+            styles.streakContainer,
+            { backgroundColor: config.accentColor + '20' }
+          ]}>
+            <Text style={[
+              styles.streakText,
+              { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+            ]}>
+              🧘 {calmStreak} calm sessions
+            </Text>
+          </View>
+        </View>
+
+        {/* Breathing Circle */}
+        {isCalming && (
+          <Animated.View 
+            style={[
+              styles.breathingCircle,
+              {
+                width: getScaledSize(200, ageGroup, 'buddySize'),
+                height: getScaledSize(200, ageGroup, 'buddySize'),
+                borderRadius: getScaledSize(100, ageGroup, 'buddySize'),
+                transform: [{ scale: breathingAnim }]
+              }
+            ]}
+          >
+            <Text style={[
+              styles.breathText,
+              { fontSize: getScaledSize(20, ageGroup, 'fontSize') }
+            ]}>
+              {isInhale ? 'Breathe In' : 'Breathe Out'}
+            </Text>
+          </Animated.View>
+        )}
+
+        {/* Buddy (smaller and calmer) */}
+        {!isCalming && buddy && (
+          <View style={styles.buddyContainer}>
+            <BuddyCharacter 
+              buddy={buddy} 
+              isStudying={false}
+              isFaded={false}
+              ageGroup={ageGroup}
+              style={{ transform: [{ scale: 0.7 }] }}
+            />
+          </View>
+        )}
+
+        {/* Timer */}
+        {isCalming && (
+          <View style={styles.timerContainer}>
+            <Text style={[
+              styles.timerText,
+              { fontSize: getScaledSize(36, ageGroup, 'fontSize') }
+            ]}>
+              {Math.floor(sessionTime / 60)}:{(sessionTime % 60).toString().padStart(2, '0')}
+            </Text>
+            <Text style={[
+              styles.breathCountText,
+              { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+            ]}>
+              {breathCount} breaths
+            </Text>
+          </View>
+        )}
+
+        {/* Action Buttons */}
+        <View style={[
+          styles.buttonContainer,
+          { paddingVertical: getScaledSize(30, ageGroup, 'spacing') }
+        ]}>
+          {!isCalming ? (
+            <BigButton 
+              title="Start Calming 🌊"
+              onPress={startCalming}
+              color="#2196F3"
+              ageGroup={ageGroup}
+            />
+          ) : (
+            <BigButton 
+              title="I'm Ready to Talk"
+              onPress={finishCalming}
+              color="#4CAF50"
+              ageGroup={ageGroup}
+            />
+          )}
+        </View>
+
+        {/* Calm Tips */}
+        {!isCalming && (
+          <View style={styles.tipsContainer}>
+            <Text style={[
+              styles.tipText,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              {getCalmTip(ageGroup)}
+            </Text>
+          </View>
+        )}
+      </View>
+    </SafeAreaView>
+  );
+}
+
+// Helper function for age-appropriate calm tips
+function getCalmTip(ageGroup) {
+  const tips = {
+    young: '💙 It\'s okay to feel big feelings',
+    elementary: '💙 Everyone needs to calm down sometimes',
+    tween: '💙 Take a moment to reset',
+    teen: '💙 Mindfulness helps focus'
+  };
+  return tips[ageGroup] || tips.elementary;
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
+  container: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  backButton: {
+    padding: 10,
+  },
+  backText: {
+    color: '#2196F3',
+  },
+  streakContainer: {
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  streakText: {
+    fontWeight: 'bold',
+    color: '#1565C0',
+  },
+  breathingCircle: {
+    backgroundColor: '#64B5F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginVertical: 50,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  breathText: {
+    fontWeight: 'bold',
+    color: 'white',
+  },
+  buddyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  timerContainer: {
+    alignItems: 'center',
+    marginVertical: 20,
+  },
+  timerText: {
+    fontWeight: 'bold',
+    color: '#1565C0',
+  },
+  breathCountText: {
+    color: '#7F8C8D',
+    marginTop: 5,
+  },
+  buttonContainer: {},
+  tipsContainer: {
+    position: 'absolute',
+    bottom: 50,
+    left: 20,
+    right: 20,
+    alignItems: 'center',
+  },
+  tipText: {
+    color: '#5E92B8',
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+});
+```
+
+---
+
+## study-buddy/src/screens/ParentSettingsScreen.js
+```javascript
+import React, { useState, useEffect, useContext } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
+  ScrollView,
+  Switch,
+  Alert
+} from 'react-native';
+import Slider from '@react-native-community/slider';
+import { Audio } from 'expo-av';
+import { getStorageItem, setStorageItem } from '../utils/storage';
+import { 
+  getAgeConfig, 
+  getScaledSize,
+  UI_SCALING_CONFIG
+} from '../utils/constants';
+import { t, getCurrentLanguage, setLanguage, getAvailableLanguages } from '../utils/i18n';
+import { SubscriptionContext } from '../../App';
+
+export default function ParentSettingsScreen({ navigation, route }) {
+  const [ageGroup, setAgeGroup] = useState('elementary');
+  const [workDuration, setWorkDuration] = useState(25);
+  const [breakDuration, setBreakDuration] = useState(5);
+  const [checkInFrequency, setCheckInFrequency] = useState(5);
+  const [interactionFrequency, setInteractionFrequency] = useState(20);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [vibrationEnabled, setVibrationEnabled] = useState(true);
+  const [twoWayInteraction, setTwoWayInteraction] = useState(true);
+  const [encouragementMessages, setEncouragementMessages] = useState([]);
+  const [recording, setRecording] = useState(null);
+  const [lastSessionLog, setLastSessionLog] = useState([]);
+  const [appLanguage, setAppLanguage] = useState(getCurrentLanguage());
+  const [speechSettings, setSpeechSettings] = useState({
+    mainScreenEnabled: true,
+    calmModeEnabled: true,
+    celebrationEnabled: true,
+    rate: 1.0,
+    pitch: 1.0,
+  });
+  const [photoSettings, setPhotoSettings] = useState({
+    autoDeleteDays: 7,
+    privacyOverlay: false,
+  });
+  const { isPremium } = useContext(SubscriptionContext);
+
+  useEffect(() => {
+    loadUserAge();
+    loadSettings();
+    loadSessionLog();
+  }, []);
+
+  const loadUserAge = async () => {
+    const age = await getStorageItem('selectedAge');
+    if (age) setAgeGroup(age);
+  };
+
+  const loadSettings = async () => {
+    // Load settings with age-appropriate defaults
+    const config = getAgeConfig(ageGroup);
+    
+    const settingsMap = [
+      ['workDuration', setWorkDuration, config.session?.defaultDuration || 25],
+      ['breakDuration', setBreakDuration, config.session?.breakDuration / 60 || 5],
+      ['checkInFrequency', setCheckInFrequency, config.checkInFrequency || 5],
+      ['interactionFrequency', setInteractionFrequency, config.interactionFrequency || 20],
+      ['soundEnabled', setSoundEnabled, true, 'boolean'],
+      ['vibrationEnabled', setVibrationEnabled, true, 'boolean'],
+      ['twoWayInteraction', setTwoWayInteraction, true, 'boolean']
+    ];
+
+    for (const [key, setter, defaultValue, type = 'number'] of settingsMap) {
+      const value = await getStorageItem(key);
+      if (value !== null) {
+        if (type === 'boolean') {
+          setter(value === 'true');
+        } else {
+          setter(parseInt(value));
+        }
+      } else {
+        setter(defaultValue);
+      }
+    }
+    
+    // Load speech settings
+    const speech = await getStorageItem('speechSettings');
+    if (speech) {
+      setSpeechSettings(JSON.parse(speech));
+    }
+    
+    // Load photo settings
+    const photo = await getStorageItem('photoSettings');
+    if (photo) {
+      setPhotoSettings(JSON.parse(photo));
+    }
+  };
+
+  const loadSessionLog = async () => {
+    const log = await getStorageItem('lastSessionLog');
+    if (log) {
+      setLastSessionLog(JSON.parse(log));
+    }
+    if (route.params?.sessionLog) {
+      setLastSessionLog(route.params.sessionLog);
+    }
+  };
+
+  const saveSettings = async () => {
+    const settings = {
+      workDuration: workDuration.toString(),
+      breakDuration: breakDuration.toString(),
+      checkInFrequency: checkInFrequency.toString(),
+      interactionFrequency: interactionFrequency.toString(),
+      soundEnabled: soundEnabled.toString(),
+      vibrationEnabled: vibrationEnabled.toString(),
+      twoWayInteraction: twoWayInteraction.toString()
+    };
+    
+    const savePromises = Object.entries(settings).map(([key, value]) => 
+      setStorageItem(key, value)
+    );
+    
+    // Save speech settings separately as JSON
+    savePromises.push(setStorageItem('speechSettings', JSON.stringify(speechSettings)));
+    
+    // Save photo settings
+    savePromises.push(setStorageItem('photoSettings', JSON.stringify(photoSettings)));
+    
+    await Promise.all(savePromises);
+    
+    Alert.alert('Success!', 'Settings saved successfully!', [
+      { text: 'OK', onPress: () => navigation.goBack() }
+    ]);
+  };
+
+  const startRecordingMessage = async () => {
+    try {
+      await Audio.requestPermissionsAsync();
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setRecording(recording);
+      
+      Alert.alert('Recording', 'Say your encouraging message now!');
+    } catch (err) {
+      Alert.alert('Error', 'Failed to start recording');
+    }
+  };
+
+  const stopRecordingMessage = async () => {
+    if (!recording) return;
+    
+    setRecording(null);
+    await recording.stopAndUnloadAsync();
+    const uri = recording.getURI();
+    
+    const messages = [...encouragementMessages, uri];
+    setEncouragementMessages(messages);
+    await setStorageItem('encouragementMessages', JSON.stringify(messages));
+    
+    Alert.alert('Success!', 'Your message has been saved!');
+  };
+
+  const resetProgress = () => {
+    Alert.alert(
+      'Reset Progress',
+      'This will reset all progress and streaks. Are you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            await Promise.all([
+              setStorageItem('currentStreak', '0'),
+              setStorageItem('totalFocusTime', '0'),
+              setStorageItem('calmStreak', '0')
+            ]);
+            Alert.alert('Reset Complete', 'All progress has been reset.');
+          }
+        }
+      ]
+    );
+  };
+
+  const formatSessionLog = () => {
+    if (!lastSessionLog || lastSessionLog.length === 0) {
+      return 'No interaction data from last session';
+    }
+
+    const responses = {
+      math: '📊 Math', reading: '📚 Reading', writing: '✏️ Writing', other: '📝 Other',
+      easy: '😊 Easy', ok: '😐 OK', hard: '😟 Hard', help: '🆘 Need help',
+      complete: '✅ Complete', most: '🔵 Most done', half: '🟡 Half done', started: '🔴 Just started'
+    };
+
+    return lastSessionLog.map((entry, index) => {
+      const time = Math.floor(entry.time / 60);
+      return `${time} min: ${responses[entry.response] || entry.response}`;
+    }).join('\n');
+  };
+
+  const config = getAgeConfig(ageGroup);
+  
+  // Get age-appropriate slider ranges
+  const getSliderConfig = (setting) => {
+    const ranges = {
+      workDuration: {
+        young: { min: 5, max: 20, step: 5 },
+        elementary: { min: 10, max: 30, step: 5 },
+        tween: { min: 15, max: 45, step: 5 },
+        teen: { min: 20, max: 60, step: 5 }
+      },
+      breakDuration: { min: 3, max: 15, step: 1 },
+      checkInFrequency: { min: 2, max: 15, step: 1 },
+      interactionFrequency: { min: 10, max: 45, step: 5 }
+    };
+    
+    return ranges[setting][ageGroup] || ranges[setting] || { min: 1, max: 10, step: 1 };
+  };
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: config.secondaryColor }]}>
+      <ScrollView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Text style={[
+              styles.backButton,
+              { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+            ]}>
+              ← Back
+            </Text>
+          </TouchableOpacity>
+          <Text style={[
+            styles.title,
+            { fontSize: getScaledSize(24, ageGroup, 'fontSize') }
+          ]}>
+            Parent Settings
+          </Text>
+        </View>
+
+        {/* Session Report */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.sectionTitle,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            Last Session Report
+          </Text>
+          <Text style={[
+            styles.sessionLog,
+            { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+          ]}>
+            {formatSessionLog()}
+          </Text>
+        </View>
+
+        {/* Timer Settings */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.sectionTitle,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            Timer Settings
+          </Text>
+          
+          {[
+            { key: 'workDuration', label: 'Work Duration', value: workDuration, setter: setWorkDuration, unit: 'minutes' },
+            { key: 'breakDuration', label: 'Break Duration', value: breakDuration, setter: setBreakDuration, unit: 'minutes' },
+            { key: 'checkInFrequency', label: 'Voice Check-in Every', value: checkInFrequency, setter: setCheckInFrequency, unit: 'minutes' }
+          ].map(({ key, label, value, setter, unit }) => {
+            const sliderConfig = getSliderConfig(key);
+            return (
+              <View key={key} style={styles.setting}>
+                <Text style={[
+                  styles.settingLabel,
+                  { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+                ]}>
+                  {label}: {value} {unit}
+                </Text>
+                <Slider
+                  style={[
+                    styles.slider,
+                    { height: getScaledSize(40, ageGroup, 'spacing') }
+                  ]}
+                  minimumValue={sliderConfig.min}
+                  maximumValue={sliderConfig.max}
+                  step={sliderConfig.step}
+                  value={value}
+                  onValueChange={setter}
+                  minimumTrackTintColor={config.accentColor}
+                  maximumTrackTintColor="#D0D0D0"
+                />
+              </View>
+            );
+          })}
+        </View>
+
+        {/* Interaction Settings */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.sectionTitle,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            Check-In Settings
+          </Text>
+          
+          <View style={styles.switchSetting}>
+            <Text style={[
+              styles.settingLabel,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              Two-Way Interaction
+            </Text>
+            <Switch
+              value={twoWayInteraction}
+              onValueChange={setTwoWayInteraction}
+              trackColor={{ false: '#D0D0D0', true: config.accentColor }}
+            />
+          </View>
+
+          {twoWayInteraction && (
+            <View style={styles.setting}>
+              <Text style={[
+                styles.settingLabel,
+                { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+              ]}>
+                Ask Questions Every: {interactionFrequency} minutes
+              </Text>
+              <Slider
+                style={[
+                  styles.slider,
+                  { height: getScaledSize(40, ageGroup, 'spacing') }
+                ]}
+                minimumValue={getSliderConfig('interactionFrequency').min}
+                maximumValue={getSliderConfig('interactionFrequency').max}
+                step={getSliderConfig('interactionFrequency').step}
+                value={interactionFrequency}
+                onValueChange={setInteractionFrequency}
+                minimumTrackTintColor={config.accentColor}
+                maximumTrackTintColor="#D0D0D0"
+              />
+            </View>
+          )}
+        </View>
+
+        {/* Notification Settings */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.sectionTitle,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            Notifications
+          </Text>
+          
+          {[
+            { key: 'soundEnabled', label: 'Sound Effects', value: soundEnabled, setter: setSoundEnabled },
+            { key: 'vibrationEnabled', label: 'Vibration', value: vibrationEnabled, setter: setVibrationEnabled }
+          ].map(({ key, label, value, setter }) => (
+            <View key={key} style={styles.switchSetting}>
+              <Text style={[
+                styles.settingLabel,
+                { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+              ]}>
+                {label}
+              </Text>
+              <Switch
+                value={value}
+                onValueChange={setter}
+                trackColor={{ false: '#D0D0D0', true: config.accentColor }}
+              />
+            </View>
+          ))}
+        </View>
+
+        {/* Language Settings */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.sectionTitle,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            Language / Idioma / Sprache
+          </Text>
+          
+          <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 10 }}>
+            {getAvailableLanguages().map((lang) => (
+              <TouchableOpacity
+                key={lang.code}
+                style={[
+                  styles.languageButton,
+                  appLanguage === lang.code && styles.languageButtonActive,
+                  { padding: getScaledSize(15, ageGroup, 'spacing') }
+                ]}
+                onPress={async () => {
+                  await setLanguage(lang.code);
+                  setAppLanguage(lang.code);
+                  Alert.alert('✓', t('saveSettings'));
+                }}
+              >
+                <Text style={styles.languageFlag}>{lang.flag}</Text>
+                <Text style={[
+                  styles.languageName,
+                  appLanguage === lang.code && styles.languageNameActive
+                ]}>
+                  {lang.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Speech Settings */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.sectionTitle,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            Speech Settings
+          </Text>
+
+          {/* Per-Mode Speech Toggles */}
+          {[
+            { key: 'mainScreenEnabled', label: 'Speech during studying' },
+            { key: 'calmModeEnabled', label: 'Speech in calm mode' },
+            { key: 'celebrationEnabled', label: 'Speech for celebrations' }
+          ].map(({ key, label }) => (
+            <View key={key} style={styles.switchSetting}>
+              <Text style={[
+                styles.settingLabel,
+                { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+              ]}>
+                {label}
+              </Text>
+              <Switch
+                value={speechSettings[key]}
+                onValueChange={(value) => setSpeechSettings({...speechSettings, [key]: value})}
+                trackColor={{ false: '#D0D0D0', true: config.accentColor }}
+              />
+            </View>
+          ))}
+
+          {/* Speech Rate */}
+          <View style={styles.sliderSetting}>
+            <Text style={[
+              styles.settingLabel,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              Speech Speed: {speechSettings.rate.toFixed(1)}x
+            </Text>
+            <Slider
+              style={{ height: 40, marginTop: 10 }}
+              minimumValue={0.5}
+              maximumValue={2.0}
+              step={0.1}
+              value={speechSettings.rate}
+              onValueChange={(value) => setSpeechSettings({...speechSettings, rate: value})}
+              minimumTrackTintColor={config.primaryColor}
+              maximumTrackTintColor="#D0D0D0"
+            />
+          </View>
+
+          {/* Speech Pitch */}
+          <View style={styles.sliderSetting}>
+            <Text style={[
+              styles.settingLabel,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              Voice Pitch: {speechSettings.pitch.toFixed(1)}
+            </Text>
+            <Slider
+              style={{ height: 40, marginTop: 10 }}
+              minimumValue={0.5}
+              maximumValue={2.0}
+              step={0.1}
+              value={speechSettings.pitch}
+              onValueChange={(value) => setSpeechSettings({...speechSettings, pitch: value})}
+              minimumTrackTintColor={config.primaryColor}
+              maximumTrackTintColor="#D0D0D0"
+            />
+          </View>
+        </View>
+
+        {/* Photo Privacy Settings */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.sectionTitle,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            Photo Privacy
+          </Text>
+
+          {/* Auto-Delete Setting */}
+          <View style={styles.sliderSetting}>
+            <Text style={[
+              styles.settingLabel,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              Auto-delete photos after: {photoSettings.autoDeleteDays} days
+            </Text>
+            <Slider
+              style={{ height: 40, marginTop: 10 }}
+              minimumValue={1}
+              maximumValue={30}
+              step={1}
+              value={photoSettings.autoDeleteDays}
+              onValueChange={(value) => setPhotoSettings({...photoSettings, autoDeleteDays: value})}
+              minimumTrackTintColor={config.primaryColor}
+              maximumTrackTintColor="#D0D0D0"
+            />
+            <Text style={{ fontSize: 12, color: '#7F8C8D', marginTop: 5 }}>
+              Photos are stored locally only and never synced to cloud
+            </Text>
+          </View>
+
+          {/* Privacy Overlay Toggle */}
+          <View style={styles.switchSetting}>
+            <Text style={[
+              styles.settingLabel,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              Privacy blur overlay
+            </Text>
+            <Switch
+              value={photoSettings.privacyOverlay}
+              onValueChange={(value) => setPhotoSettings({...photoSettings, privacyOverlay: value})}
+              trackColor={{ false: '#D0D0D0', true: config.accentColor }}
+            />
+          </View>
+        </View>
+
+        {/* Custom Messages */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.sectionTitle,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            Custom Encouragement
+          </Text>
+          
+          <TouchableOpacity
+            style={[
+              styles.recordButton,
+              recording && styles.recordingActive,
+              { 
+                padding: getScaledSize(15, ageGroup, 'spacing'),
+                backgroundColor: recording ? '#C0392B' : '#E74C3C'
+              }
+            ]}
+            onPress={recording ? stopRecordingMessage : startRecordingMessage}
+          >
+            <Text style={[
+              styles.recordButtonText,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              {recording ? '⏹️ Stop Recording' : '🎤 Record Message'}
+            </Text>
+          </TouchableOpacity>
+          
+          <Text style={[
+            styles.hint,
+            { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+          ]}>
+            Record encouraging messages in your voice for check-ins!
+          </Text>
+        </View>
+
+        {/* Actions */}
+        <View style={[
+          styles.section,
+          { padding: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          {!isPremium && (
+            <TouchableOpacity 
+              style={[
+                styles.upgradeButton,
+                { 
+                  backgroundColor: '#FFD700',
+                  padding: getScaledSize(15, ageGroup, 'spacing'),
+                  marginBottom: 10,
+                  borderRadius: 10,
+                  alignItems: 'center'
+                }
+              ]} 
+              onPress={() => navigation.navigate('Paywall', { ageGroup })}
+            >
+              <Text style={[
+                styles.upgradeButtonText,
+                { fontSize: getScaledSize(18, ageGroup, 'fontSize'), fontWeight: 'bold' }
+              ]}>
+                🌟 Upgrade to Premium
+              </Text>
+            </TouchableOpacity>
+          )}
+          
+          <TouchableOpacity 
+            style={[
+              styles.saveButton,
+              { 
+                padding: getScaledSize(15, ageGroup, 'spacing'),
+                backgroundColor: config.primaryColor 
+              }
+            ]} 
+            onPress={saveSettings}
+          >
+            <Text style={[
+              styles.saveButtonText,
+              { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+            ]}>
+              Save Settings
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[
+              styles.resetButton,
+              { padding: getScaledSize(15, ageGroup, 'spacing') }
+            ]} 
+            onPress={resetProgress}
+          >
+            <Text style={[
+              styles.resetButtonText,
+              { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+            ]}>
+              Reset All Progress
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
+  container: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
+  header: {
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  backButton: {
+    position: 'absolute',
+    left: 0,
+    color: '#4A90E2',
+  },
+  title: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+  },
+  section: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  sectionTitle: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+    marginBottom: 20,
+  },
+  sessionLog: {
+    color: '#2C3E50',
+    lineHeight: 22,
+    fontFamily: 'monospace',
+  },
+  setting: {
+    marginBottom: 20,
+  },
+  settingLabel: {
+    color: '#2C3E50',
+    marginBottom: 10,
+  },
+  slider: {
+    width: '100%',
+  },
+  switchSetting: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  recordButton: {
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  recordingActive: {
+    backgroundColor: '#C0392B',
+  },
+  recordButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  hint: {
+    color: '#7F8C8D',
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  saveButton: {
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  saveButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  resetButton: {
+    backgroundColor: '#E74C3C',
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  resetButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  languageButton: {
+    alignItems: 'center',
+    backgroundColor: '#F0F8FF',
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  languageButtonActive: {
+    borderColor: '#4A90E2',
+    backgroundColor: '#E8F4FF',
+  },
+  languageFlag: {
+    fontSize: 32,
+    marginBottom: 5,
+  },
+  languageName: {
+    fontSize: 14,
+    color: '#7F8C8D',
+  },
+  languageNameActive: {
+    color: '#4A90E2',
+    fontWeight: 'bold',
+  },
+  upgradeButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  upgradeButtonText: {
+    color: '#2C3E50',
+  },
+});
+```
+
+---
+
+## study-buddy/src/screens/CelebrationScreen.js
+```javascript
+import React, { useEffect, useRef, useState, useContext } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
+  Dimensions,
+  Share,
+  Modal
+} from 'react-native';
+import LottieView from 'lottie-react-native';
+import * as Speech from 'expo-speech';
+import * as Haptics from 'expo-haptics';
+import { setStorageItem, getStorageItem } from '../utils/storage';
+import { 
+  getAgeConfig, 
+  getScaledSize,
+  TIMING_CONFIG
+} from '../utils/constants';
+import { SubscriptionContext } from '../../App';
+
+const { width, height } = Dimensions.get('window');
+
+export default function CelebrationScreen({ navigation, route }) {
+  const { sessionTime, totalTime, streak, ageGroup, workPhoto, sessionLog } = route.params;
+  const animationRef = useRef(null);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [whatWorked, setWhatWorked] = useState([]);
+  const { isPremium } = useContext(SubscriptionContext);
+
+  useEffect(() => {
+    celebrate();
+    checkForPaywall();
+    // Show feedback modal after configured delay
+    setTimeout(() => setShowFeedback(true), TIMING_CONFIG.animations.celebrationDisplay);
+  }, []);
+
+  const checkForPaywall = async () => {
+    if (!isPremium) {
+      const sessionsCount = await getStorageItem('sessionsCount');
+      const count = sessionsCount ? parseInt(sessionsCount) + 1 : 1;
+      await setStorageItem('sessionsCount', count.toString());
+      
+      // Show paywall after 3 sessions
+      if (count === 3) {
+        setTimeout(() => {
+          navigation.navigate('Paywall', { ageGroup });
+        }, 3000); // Show after celebration
+      }
+    }
+  };
+
+  const celebrate = () => {
+    const config = getAgeConfig(ageGroup);
+    const celebrationMessage = getCelebrationMessage(ageGroup, sessionTime);
+    
+    // Play celebration sound
+    Speech.stop();
+    Speech.speak(celebrationMessage, {
+      language: 'en',
+      pitch: config.voicePitch + 0.1, // Slightly higher for celebration
+      rate: config.voiceRate
+    });
+
+    // Haptic feedback
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    
+    // Play animation
+    if (animationRef.current) {
+      animationRef.current.play();
+    }
+  };
+
+  const getCelebrationMessage = (ageGroup, sessionTime) => {
+    const timeQuality = getTimeQuality(sessionTime);
+    
+    const messages = {
+      young: {
+        excellent: "WOW! You're AMAZING! Super duper job!",
+        good: "Yay! You did it! I'm so proud!",
+        okay: "Great job! You're learning so well!"
+      },
+      elementary: {
+        excellent: "Amazing job! You did it! I'm so proud of you!",
+        good: "Excellent work! You stayed focused so well!",
+        okay: "Great job! You're building strong study habits!"
+      },
+      tween: {
+        excellent: "Incredible focus! You crushed it!",
+        good: "Solid work! Nice focus.",
+        okay: "Good session. Keep it up."
+      },
+      teen: {
+        excellent: "Outstanding work. Impressive focus.",
+        good: "Good session. Well done.",
+        okay: "Decent work. Progress made."
+      }
+    };
+    
+    return messages[ageGroup]?.[timeQuality] || messages.elementary.okay;
+  };
+
+  const getTimeQuality = (sessionTime) => {
+    if (sessionTime >= 1800) return 'excellent'; // 30+ minutes
+    if (sessionTime >= 900) return 'good';      // 15+ minutes
+    return 'okay';                              // Under 15 minutes
+  };
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const shareSuccess = async () => {
+    const config = getAgeConfig(ageGroup);
+    const shareMessage = getShareMessage(ageGroup, sessionTime, streak);
+    
+    try {
+      await Share.share({ message: shareMessage });
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const getShareMessage = (ageGroup, sessionTime, streak) => {
+    const minutes = Math.floor(sessionTime / 60);
+    const baseMessage = `🎉 My child just completed ${minutes} minutes of focused study time with Study Buddy! ${streak} day streak! 🔥`;
+    
+    const ageSpecificAdditions = {
+      young: ' They\'re such a superstar! ⭐',
+      elementary: ' So proud of their focus! 📚',
+      tween: ' Building great study habits! 💪',
+      teen: ' Excellent self-discipline! 🎯'
+    };
+    
+    return baseMessage + (ageSpecificAdditions[ageGroup] || '');
+  };
+
+  const getAchievementBadge = (sessionTime, ageGroup) => {
+    // Age-appropriate achievement thresholds
+    const thresholds = {
+      young: { gold: 600, silver: 300, bronze: 180 },      // 10, 5, 3 minutes
+      elementary: { gold: 1200, silver: 600, bronze: 300 }, // 20, 10, 5 minutes  
+      tween: { gold: 1500, silver: 900, bronze: 600 },     // 25, 15, 10 minutes
+      teen: { gold: 1800, silver: 1200, bronze: 900 }      // 30, 20, 15 minutes
+    };
+    
+    const t = thresholds[ageGroup] || thresholds.elementary;
+    
+    if (sessionTime >= t.gold) return '🏆';
+    if (sessionTime >= t.silver) return '🥇';
+    if (sessionTime >= t.bronze) return '🥈';
+    return '🥉';
+  };
+
+  const getEncouragementMessage = (sessionTime, ageGroup) => {
+    const timeQuality = getTimeQuality(sessionTime);
+    
+    const messages = {
+      young: {
+        excellent: "Incredible focus! You're a study champion!",
+        good: "Amazing work! You stayed focused so well!",
+        okay: "Great job! Every minute counts!"
+      },
+      elementary: {
+        excellent: "Incredible focus! You're a study champion!",
+        good: "Amazing work! You stayed focused so well!",
+        okay: "Great job! You're building strong study habits!"
+      },
+      tween: {
+        excellent: "Outstanding focus! You're on fire!",
+        good: "Great work! Your focus is getting stronger!",
+        okay: "Good start! Building those focus muscles!"
+      },
+      teen: {
+        excellent: "Exceptional focus. You're developing real discipline.",
+        good: "Solid session. Your concentration is improving.",
+        okay: "Good work. Consistency is key."
+      }
+    };
+    
+    return messages[ageGroup]?.[timeQuality] || messages.elementary.okay;
+  };
+
+  const handleWhatWorked = async (item) => {
+    const newWhatWorked = whatWorked.includes(item) 
+      ? whatWorked.filter(i => i !== item)
+      : [...whatWorked, item];
+    
+    setWhatWorked(newWhatWorked);
+  };
+
+  const saveFeedback = async () => {
+    const feedbackData = {
+      whatWorked: whatWorked,
+      sessionTime: sessionTime,
+      ageGroup: ageGroup,
+      timestamp: new Date().toISOString()
+    };
+    
+    const existingFeedback = await getStorageItem('feedbackHistory');
+    const history = existingFeedback ? JSON.parse(existingFeedback) : [];
+    history.push(feedbackData);
+    
+    // Keep only last 30 sessions for performance
+    if (history.length > 30) {
+      history.shift();
+    }
+    
+    await setStorageItem('feedbackHistory', JSON.stringify(history));
+    setShowFeedback(false);
+    
+    navigation.navigate('ModeSelection');
+  };
+
+  const config = getAgeConfig(ageGroup);
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: config.secondaryColor }]}>
+      <View style={styles.container}>
+        {/* Celebration Animation */}
+        <View style={[
+          styles.animationContainer,
+          { height: getScaledSize(200, ageGroup, 'spacing') }
+        ]}>
+          <Text style={[
+            styles.trophy,
+            { fontSize: getScaledSize(100, ageGroup, 'iconSize') }
+          ]}>
+            {getAchievementBadge(sessionTime, ageGroup)}
+          </Text>
+          <LottieView
+            ref={animationRef}
+            source={require('../assets/animations/confetti.json')}
+            autoPlay
+            loop={false}
+            style={styles.lottie}
+          />
+        </View>
+
+        {/* Stats */}
+        <View style={styles.statsContainer}>
+          <Text style={[
+            styles.title,
+            { 
+              fontSize: getScaledSize(32, ageGroup, 'fontSize'),
+              color: config.primaryColor 
+            }
+          ]}>
+            Amazing Job! 🎉
+          </Text>
+          <Text style={[
+            styles.message,
+            { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+          ]}>
+            {getEncouragementMessage(sessionTime, ageGroup)}
+          </Text>
+          
+          {/* Dynamic stat boxes */}
+          {[
+            { label: "Today's Focus Time", value: formatTime(sessionTime) },
+            { label: "Current Streak", value: `🔥 ${streak} days` },
+            { label: "Total Focus Time", value: `${Math.floor(totalTime / 60)} minutes` }
+          ].map((stat, index) => (
+            <View key={index} style={[
+              styles.statBox,
+              { 
+                paddingHorizontal: getScaledSize(30, ageGroup, 'spacing'),
+                paddingVertical: getScaledSize(15, ageGroup, 'spacing'),
+                minWidth: width * 0.7 
+              }
+            ]}>
+              <Text style={[
+                styles.statLabel,
+                { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+              ]}>
+                {stat.label}
+              </Text>
+              <Text style={[
+                styles.statValue,
+                { fontSize: getScaledSize(24, ageGroup, 'fontSize') }
+              ]}>
+                {stat.value}
+              </Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Actions */}
+        <View style={[
+          styles.buttonContainer,
+          { paddingHorizontal: getScaledSize(20, ageGroup, 'spacing') }
+        ]}>
+          <TouchableOpacity 
+            style={[
+              styles.shareButton,
+              { 
+                padding: getScaledSize(15, ageGroup, 'spacing'),
+                marginBottom: getScaledSize(15, ageGroup, 'spacing')
+              }
+            ]} 
+            onPress={shareSuccess}
+          >
+            <Text style={[
+              styles.shareButtonText,
+              { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+            ]}>
+              Share Success! 📤
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[
+              styles.doneButton,
+              { 
+                padding: getScaledSize(15, ageGroup, 'spacing'),
+                backgroundColor: config.primaryColor 
+              }
+            ]} 
+            onPress={() => setShowFeedback(true)}
+          >
+            <Text style={[
+              styles.doneButtonText,
+              { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+            ]}>
+              Continue
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* What Worked Feedback Modal */}
+      <Modal
+        visible={showFeedback}
+        transparent={true}
+        animationType="slide"
+      >
+        <View style={styles.modalContainer}>
+          <View style={[
+            styles.modalContent,
+            { padding: getScaledSize(30, ageGroup, 'spacing') }
+          ]}>
+            <Text style={[
+              styles.modalTitle,
+              { fontSize: getScaledSize(20, ageGroup, 'fontSize') }
+            ]}>
+              What helped you today?
+            </Text>
+            <Text style={[
+              styles.modalSubtitle,
+              { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+            ]}>
+              Pick all that helped!
+            </Text>
+            
+            <View style={styles.feedbackContainer}>
+              {[
+                { id: 'buddy', emoji: '🤖', label: 'Buddy' },
+                { id: 'timer', emoji: '⏰', label: 'Timer' },
+                { id: 'checkins', emoji: '💬', label: 'Check-ins' },
+                { id: 'breaks', emoji: '🌟', label: 'Breaks' }
+              ].map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[
+                    styles.feedbackButton,
+                    whatWorked.includes(item.id) && [
+                      styles.feedbackSelected,
+                      { borderColor: config.accentColor }
+                    ],
+                    { 
+                      padding: getScaledSize(15, ageGroup, 'spacing'),
+                      minWidth: getScaledSize(80, ageGroup, 'spacing')
+                    }
+                  ]}
+                  onPress={() => handleWhatWorked(item.id)}
+                >
+                  <Text style={[
+                    styles.feedbackEmoji,
+                    { fontSize: getScaledSize(30, ageGroup, 'iconSize') }
+                  ]}>
+                    {item.emoji}
+                  </Text>
+                  <Text style={[
+                    styles.feedbackText,
+                    { fontSize: getScaledSize(12, ageGroup, 'fontSize') }
+                  ]}>
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={[
+              styles.modalTitle,
+              { fontSize: getScaledSize(20, ageGroup, 'fontSize') }
+            ]}>
+              How do you feel?
+            </Text>
+            
+            <View style={styles.feelingContainer}>
+              {[
+                { id: 'great', emoji: '😊', label: 'Great!' },
+                { id: 'good', emoji: '🙂', label: 'Good' },
+                { id: 'ok', emoji: '😐', label: 'OK' },
+                { id: 'tired', emoji: '😴', label: 'Tired' }
+              ].map((feeling) => (
+                <TouchableOpacity
+                  key={feeling.id}
+                  style={[
+                    styles.feelingButton,
+                    { padding: getScaledSize(10, ageGroup, 'spacing') }
+                  ]}
+                  onPress={saveFeedback}
+                >
+                  <Text style={[
+                    styles.feelingEmoji,
+                    { fontSize: getScaledSize(35, ageGroup, 'iconSize') }
+                  ]}>
+                    {feeling.emoji}
+                  </Text>
+                  <Text style={[
+                    styles.feelingText,
+                    { fontSize: getScaledSize(12, ageGroup, 'fontSize') }
+                  ]}>
+                    {feeling.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.skipButton,
+                { padding: getScaledSize(10, ageGroup, 'spacing') }
+              ]}
+              onPress={() => {
+                setShowFeedback(false);
+                navigation.navigate('ModeSelection');
+              }}
+            >
+              <Text style={[
+                styles.skipText,
+                { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+              ]}>
+                Skip
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
+  container: {
+    flex: 1,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  animationContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  trophy: {
+    position: 'absolute',
+    zIndex: 1,
+  },
+  lottie: {
+    width: width,
+    height: 200,
+    position: 'absolute',
+  },
+  statsContainer: {
+    alignItems: 'center',
+    marginVertical: 30,
+  },
+  title: {
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  message: {
+    color: '#7F8C8D',
+    textAlign: 'center',
+    marginBottom: 30,
+  },
+  statBox: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    marginBottom: 15,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  statLabel: {
+    color: '#7F8C8D',
+    marginBottom: 5,
+  },
+  statValue: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+  },
+  buttonContainer: {
+    width: '100%',
+  },
+  shareButton: {
+    backgroundColor: '#3498DB',
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  shareButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  doneButton: {
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  doneButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    width: '90%',
+    maxWidth: 400,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontWeight: 'bold',
+    color: '#2C3E50',
+    marginBottom: 10,
+    marginTop: 20,
+  },
+  modalSubtitle: {
+    color: '#7F8C8D',
+    marginBottom: 20,
+  },
+  feedbackContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  feedbackButton: {
+    backgroundColor: '#F0F8FF',
+    borderRadius: 15,
+    margin: 5,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  feedbackSelected: {
+    backgroundColor: '#E3F2FD',
+  },
+  feedbackEmoji: {
+    marginBottom: 5,
+  },
+  feedbackText: {
+    color: '#2C3E50',
+  },
+  feelingContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginVertical: 20,
+  },
+  feelingButton: {
+    alignItems: 'center',
+  },
+  feelingEmoji: {
+    marginBottom: 5,
+  },
+  feelingText: {
+    color: '#2C3E50',
+  },
+  skipButton: {
+    marginTop: 10,
+  },
+  skipText: {
+    color: '#7F8C8D',
+  },
+});
+```
+
+---
+
+## study-buddy/src/components/BuddyCharacter.js
+```javascript
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Animated } from 'react-native';
+import LottieView from 'lottie-react-native';
+import { 
+  getAgeConfig, 
+  getScaledSize,
+  TIMING_CONFIG
+} from '../utils/constants';
+
+export default function BuddyCharacter({ 
+  buddy, 
+  isStudying, 
+  isFaded, 
+  ageGroup = 'elementary', 
+  style,
+  customSize = null 
+}) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+
+  const config = getAgeConfig(ageGroup);
+  
+  // Calculate buddy size using modular system
+  const buddySize = customSize || getScaledSize(config.buddySize || 180, ageGroup, 'buddySize');
+
+  // Fade effect to prevent staring - using configured timing
+  useEffect(() => {
+    const targetOpacity = isStudying && isFaded ? 0.3 : 1;
+    const duration = isStudying && isFaded ? TIMING_CONFIG.animations.fadeIn * 4 : TIMING_CONFIG.animations.fadeIn;
+    
+    Animated.timing(fadeAnim, {
+      toValue: targetOpacity,
+      duration,
+      useNativeDriver: true,
+    }).start();
+  }, [isFaded, isStudying]);
+
+  useEffect(() => {
+    if (isStudying) {
+      startStudyingAnimation();
+    } else {
+      startIdleAnimation();
+    }
+    
+    return () => {
+      scaleAnim.stopAnimation();
+      rotateAnim.stopAnimation();
+    };
+  }, [isStudying]);
+
+  const startStudyingAnimation = () => {
+    // Gentle breathing animation using configured timing
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(scaleAnim, {
+          toValue: 1.05,
+          duration: TIMING_CONFIG.animations.breathingIn / 2, // Faster for study mode
+          useNativeDriver: true,
+        }),
+        Animated.timing(scaleAnim, {
+          toValue: 1,
+          duration: TIMING_CONFIG.animations.breathingOut / 2,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  };
+
+  const startIdleAnimation = () => {
+    // Gentle idle sway animation
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(rotateAnim, {
+          toValue: 1,
+          duration: 3000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(rotateAnim, {
+          toValue: -1,
+          duration: 3000,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  };
+
+  const spin = rotateAnim.interpolate({
+    inputRange: [-1, 1],
+    outputRange: ['-10deg', '10deg'],
+  });
+
+  if (!buddy) return null;
+
+  const studyingIndicatorText = getStudyingIndicatorText(ageGroup);
+  const fadedMessageText = getFadedMessageText(ageGroup);
+
+  return (
+    <Animated.View 
+      style={[
+        styles.container, 
+        style,
+        {
+          opacity: fadeAnim,
+          transform: [
+            { scale: scaleAnim },
+            { rotate: isStudying ? '0deg' : spin }
+          ]
+        }
+      ]}
+    >
+      <View style={[
+        styles.buddyCircle, 
+        { 
+          backgroundColor: buddy.color,
+          width: buddySize,
+          height: buddySize,
+          borderRadius: buddySize / 2,
+        }
+      ]}>
+        <Text style={[
+          styles.buddyEmoji, 
+          { fontSize: buddySize * 0.44 }
+        ]}>
+          {buddy.emoji}
+        </Text>
+      </View>
+      
+      {isStudying && !isFaded && (
+        <View style={[
+          styles.studyingIndicator,
+          { 
+            paddingHorizontal: getScaledSize(20, ageGroup, 'spacing'),
+            paddingVertical: getScaledSize(8, ageGroup, 'spacing')
+          }
+        ]}>
+          <Text style={[
+            styles.studyingText,
+            { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+          ]}>
+            {studyingIndicatorText}
+          </Text>
+        </View>
+      )}
+      
+      {isFaded && (
+        <Text style={[
+          styles.fadedMessage,
+          { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+        ]}>
+          {fadedMessageText}
+        </Text>
+      )}
+    </Animated.View>
+  );
+}
+
+// Helper functions for age-appropriate content
+function getStudyingIndicatorText(ageGroup) {
+  const indicators = {
+    young: '📚 Learning...',
+    elementary: '📚 Studying...',
+    tween: '💻 Working...',
+    teen: '📱 Focus'
+  };
+  return indicators[ageGroup] || indicators.elementary;
+}
+
+function getFadedMessageText(ageGroup) {
+  const messages = {
+    young: '👀 Look at your work!',
+    elementary: '👀 Eyes on your work!',
+    tween: '👀 Stay focused',
+    teen: '👀 Focus'
+  };
+  return messages[ageGroup] || messages.elementary;
+}
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+  },
+  buddyCircle: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  buddyEmoji: {
+    // Size set dynamically
+  },
+  studyingIndicator: {
+    position: 'absolute',
+    bottom: -30,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  studyingText: {
+    fontWeight: '600',
+    color: '#2C3E50',
+  },
+  fadedMessage: {
+    position: 'absolute',
+    bottom: -30,
+    color: '#7F8C8D',
+    fontStyle: 'italic',
+  },
+});
+```
+
+---
+
+## study-buddy/src/components/StudyTimer.js
+```javascript
+import React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { 
+  getAgeConfig, 
+  getScaledSize 
+} from '../utils/constants';
+
+export default function StudyTimer({ seconds, ageGroup = 'elementary' }) {
+  const config = getAgeConfig(ageGroup);
+
+  const formatTime = (totalSeconds) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const getTimerColor = (seconds, ageGroup) => {
+    // Age-appropriate color progression
+    const colorProgression = {
+      young: {
+        early: '#27AE60',    // Green - exciting start
+        middle: '#F39C12',   // Orange - keep going  
+        late: '#E74C3C',     // Red - almost done!
+        extended: '#9B59B6'  // Purple - wow!
+      },
+      elementary: {
+        early: '#27AE60',    // Green
+        middle: '#F39C12',   // Orange
+        late: '#3498DB',     // Blue
+        extended: '#9B59B6'  // Purple
+      },
+      tween: {
+        early: '#3498DB',    // Blue - calm start
+        middle: '#27AE60',   // Green - in the zone
+        late: '#F39C12',     // Orange - pushing through
+        extended: '#9B59B6'  // Purple - impressive
+      },
+      teen: {
+        early: '#95A5A6',    // Gray - minimal
+        middle: '#3498DB',   // Blue - focused
+        late: '#27AE60',     // Green - strong
+        extended: '#9B59B6'  // Purple - exceptional
+      }
+    };
+    
+    const colors = colorProgression[ageGroup] || colorProgression.elementary;
+    
+    if (seconds < 300) return colors.early;      // First 5 minutes
+    if (seconds < 900) return colors.middle;     // 5-15 minutes  
+    if (seconds < 1800) return colors.late;      // 15-30 minutes
+    return colors.extended;                      // 30+ minutes
+  };
+
+  const getMilestoneMessage = (seconds, ageGroup) => {
+    if (seconds % 300 !== 0) return null; // Only show every 5 minutes
+    
+    const minutes = Math.floor(seconds / 60);
+    const milestones = {
+      young: `🎉 ${minutes} minutes! You're amazing!`,
+      elementary: `🎉 ${minutes} minutes! Great job!`,
+      tween: `🔥 ${minutes} minutes! Crushing it!`,
+      teen: `💯 ${minutes} minutes. Solid.`
+    };
+    
+    return milestones[ageGroup] || milestones.elementary;
+  };
+
+  const timerColor = getTimerColor(seconds, ageGroup);
+  const milestoneText = getMilestoneMessage(seconds, ageGroup);
+
+  return (
+    <View style={[
+      styles.container, 
+      { 
+        backgroundColor: timerColor,
+        paddingHorizontal: getScaledSize(40, ageGroup, 'spacing'),
+        paddingVertical: getScaledSize(20, ageGroup, 'spacing'),
+        borderRadius: getScaledSize(25, ageGroup, 'spacing')
+      }
+    ]}>
+      <Text style={[
+        styles.label,
+        { fontSize: getScaledSize(14, ageGroup, 'fontSize') }
+      ]}>
+        Focus Time
+      </Text>
+      <Text style={[
+        styles.time,
+        { fontSize: getScaledSize(48, ageGroup, 'fontSize') }
+      ]}>
+        {formatTime(seconds)}
+      </Text>
+      {milestoneText && (
+        <Text style={[
+          styles.milestone,
+          { fontSize: getScaledSize(16, ageGroup, 'fontSize') }
+        ]}>
+          {milestoneText}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+    marginVertical: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  label: {
+    color: 'white',
+    opacity: 0.9,
+    marginBottom: 5,
+  },
+  time: {
+    fontWeight: 'bold',
+    color: 'white',
+  },
+  milestone: {
+    color: 'white',
+    marginTop: 5,
+  },
+});
+```
+
+---
+
+## study-buddy/src/components/CheckInMessage.js
+```javascript
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Animated } from 'react-native';
+import { 
+  getAgeConfig, 
+  getScaledSize,
+  TIMING_CONFIG
+} from '../utils/constants';
+
+export default function CheckInMessage({ message, ageGroup = 'elementary' }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(-50)).current;
+
+  const config = getAgeConfig(ageGroup);
+
+  useEffect(() => {
+    // Fade in and slide down using configured timing
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: TIMING_CONFIG.animations.fadeIn,
+        useNativeDriver: true,
+      }),
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        tension: 50,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    // Fade out after configured display time
+    setTimeout(() => {
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: TIMING_CONFIG.animations.fadeIn,
+        useNativeDriver: true,
+      }).start();
+    }, TIMING_CONFIG.session.checkInDisplay);
+  }, [message]);
+
+  return (
+    <Animated.View 
+      style={[
+        styles.container,
+        {
+          opacity: fadeAnim,
+          transform: [{ translateY: slideAnim }],
+          backgroundColor: config.accentColor || '#4A90E2',
+          paddingHorizontal: getScaledSize(20, ageGroup, 'spacing'),
+          paddingVertical: getScaledSize(15, ageGroup, 'spacing'),
+          borderRadius: getScaledSize(15, ageGroup, 'spacing'),
+          top: getScaledSize(100, ageGroup, 'spacing')
+        },
+      ]}
+    >
+      <Text style={[
+        styles.message,
+        { fontSize: getScaledSize(18, ageGroup, 'fontSize') }
+      ]}>
+        {message}
+      </Text>
+    </Animated.View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+    zIndex: 1000,
+  },
+  message: {
+    fontWeight: '600',
+    color: 'white',
+    textAlign: 'center',
+  },
+});
+```
+
+---
+
+## study-buddy/src/components/BigButton.js
+```javascript
+import React, { useRef } from 'react';
+import { TouchableOpacity, Text, StyleSheet, Animated } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { 
+  getScaledSize,
+  TIMING_CONFIG
+} from '../utils/constants';
+
+export default function BigButton({ 
+  title, 
+  onPress, 
+  color = '#4A90E2', 
+  style,
+  ageGroup = 'elementary'
+}) {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+
+  const handlePressIn = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 0.95,
+      tension: 100,
+      friction: 10,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      tension: 50,
+      friction: 5,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handlePress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    onPress();
+  };
+
+  return (
+    <Animated.View style={[{ transform: [{ scale: scaleAnim }] }, style]}>
+      <TouchableOpacity
+        style={[
+          styles.button, 
+          { 
+            backgroundColor: color,
+            paddingHorizontal: getScaledSize(40, ageGroup, 'spacing'),
+            paddingVertical: getScaledSize(20, ageGroup, 'spacing'),
+            borderRadius: getScaledSize(30, ageGroup, 'spacing')
+          }
+        ]}
+        onPress={handlePress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        activeOpacity={0.8}
+      >
+        <Text style={[
+          styles.buttonText,
+          { fontSize: getScaledSize(24, ageGroup, 'fontSize') }
+        ]}>
+          {title}
+        </Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+const styles = StyleSheet.create({
+  button: {
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  buttonText: {
+    fontWeight: 'bold',
+    color: 'white',
+  },
+});
+```
+
+---
+
+## study-buddy/src/utils/i18n.js
+```javascript
+// Minimal i18n implementation for Study Buddy
+// Supports: English, German, Spanish
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Localization from 'expo-localization';
+
+const translations = {
+  en: {
+    // Mode Selection
+    howAreYouFeeling: 'How are you feeling?',
+    readyToWork: 'Ready to Work!',
+    needToCalmDown: 'Need to Calm Down',
+    startQuickly: 'Start quickly or pick a mode below.',
+    
+    // Onboarding
+    howOldIsYourChild: 'How old is your study superstar?',
+    weWillCustomize: "We'll customize everything for their age!",
+    pickYourFriend: 'Pick Your Friend!',
+    whoWillHelp: 'Who will help you today?',
+    whatsYourName: "What's Your Name?",
+    holdToRecord: 'Hold to Record',
+    recording: 'Recording...',
+    skipForNow: 'Skip for now',
+    weAreReady: "We're Ready!",
+    
+    // Main Screen
+    letsWorkOn: "Let's work on",
+    focusTime: 'Focus Time',
+    dayStreak: 'day streak',
+    studyTime: 'Study time',
+    startStudying: 'Start Studying!',
+    breakTime: 'Break Time!',
+    finished: 'Finished!',
+    
+    // Subjects
+    math: 'Math',
+    reading: 'Reading',
+    writing: 'Writing',
+    science: 'Science',
+    chemistry: 'Chemistry',
+    biology: 'Biology',
+    history: 'History',
+    geography: 'Geography',
+    other: 'Other',
+    
+    // Check-ins
+    whatAreYouWorkingOn: 'What are you working on?',
+    howsItGoing: "How's it going?",
+    howMuchDone: 'How much done?',
+    easy: 'Easy!',
+    ok: 'OK',
+    hard: 'Hard',
+    needHelp: 'Need help',
+    allDone: 'All done',
+    most: 'Most',
+    half: 'Half',
+    justStarted: 'Just started',
+    
+    // Celebration
+    amazingJob: 'Amazing Job!',
+    sessionComplete: 'Session Complete',
+    todaysFocusTime: "Today's Focus Time",
+    currentStreak: 'Current Streak',
+    totalFocusTime: 'Total Focus Time',
+    shareSuccess: 'Share Success!',
+    continue: 'Continue',
+    
+    // Parent Settings
+    parentSettings: 'Parent Settings',
+    parentAccess: 'Parent Access',
+    saveSettings: 'Save Settings',
+    timerSettings: 'Timer Settings',
+    workDuration: 'Work Duration',
+    breakDuration: 'Break Duration',
+    minutes: 'minutes',
+    
+    // Calm Mode
+    startCalming: 'Start Calming',
+    breatheIn: 'Breathe In',
+    breatheOut: 'Breathe Out',
+    breathsCount: 'breaths',
+    imReadyToTalk: "I'm ready to talk",
+    
+    // Quick Start Labels
+    quickMath: 'Math',
+    quickRead: 'Read',
+    quickScience: 'Science',
+    quickWrite: 'Write',
+    quickChem: 'Chem'
+  },
+  
+  de: {
+    // Mode Selection
+    howAreYouFeeling: 'Wie fühlst du dich?',
+    readyToWork: 'Bereit zu arbeiten!',
+    needToCalmDown: 'Muss mich beruhigen',
+    startQuickly: 'Schnell starten oder Modus wählen.',
+    
+    // Onboarding
+    howOldIsYourChild: 'Wie alt ist dein Lern-Superstar?',
+    weWillCustomize: 'Wir passen alles an das Alter an!',
+    pickYourFriend: 'Wähle deinen Freund!',
+    whoWillHelp: 'Wer hilft dir heute?',
+    whatsYourName: 'Wie heißt du?',
+    holdToRecord: 'Halten zum Aufnehmen',
+    recording: 'Aufnahme...',
+    skipForNow: 'Überspringen',
+    weAreReady: 'Wir sind bereit!',
+    
+    // Main Screen
+    letsWorkOn: 'Lass uns arbeiten an',
+    focusTime: 'Fokuszeit',
+    dayStreak: 'Tage in Folge',
+    studyTime: 'Lernzeit',
+    startStudying: 'Lernen starten!',
+    breakTime: 'Pausenzeit!',
+    finished: 'Fertig!',
+    
+    // Subjects
+    math: 'Mathe',
+    reading: 'Lesen',
+    writing: 'Schreiben',
+    science: 'Wissenschaft',
+    chemistry: 'Chemie',
+    biology: 'Biologie',
+    history: 'Geschichte',
+    geography: 'Geographie',
+    other: 'Andere',
+    
+    // Check-ins
+    whatAreYouWorkingOn: 'Woran arbeitest du?',
+    howsItGoing: 'Wie läuft es?',
+    howMuchDone: 'Wie viel geschafft?',
+    easy: 'Einfach!',
+    ok: 'OK',
+    hard: 'Schwer',
+    needHelp: 'Brauche Hilfe',
+    allDone: 'Alles fertig',
+    most: 'Das meiste',
+    half: 'Hälfte',
+    justStarted: 'Gerade angefangen',
+    
+    // Celebration
+    amazingJob: 'Großartige Arbeit!',
+    sessionComplete: 'Sitzung abgeschlossen',
+    todaysFocusTime: 'Heutige Fokuszeit',
+    currentStreak: 'Aktuelle Serie',
+    totalFocusTime: 'Gesamte Fokuszeit',
+    shareSuccess: 'Erfolg teilen!',
+    continue: 'Weiter',
+    
+    // Parent Settings
+    parentSettings: 'Elterneinstellungen',
+    parentAccess: 'Elternzugang',
+    saveSettings: 'Einstellungen speichern',
+    timerSettings: 'Timer-Einstellungen',
+    workDuration: 'Arbeitsdauer',
+    breakDuration: 'Pausendauer',
+    minutes: 'Minuten',
+    
+    // Calm Mode
+    startCalming: 'Beruhigung starten',
+    breatheIn: 'Einatmen',
+    breatheOut: 'Ausatmen',
+    breathsCount: 'Atemzüge',
+    imReadyToTalk: 'Ich bin bereit zu reden',
+    
+    // Quick Start Labels
+    quickMath: 'Mathe',
+    quickRead: 'Lesen',
+    quickScience: 'Wissen',
+    quickWrite: 'Schreiben',
+    quickChem: 'Chemie'
+  },
+  
+  es: {
+    // Mode Selection
+    howAreYouFeeling: '¿Cómo te sientes?',
+    readyToWork: '¡Listo para trabajar!',
+    needToCalmDown: 'Necesito calmarme',
+    startQuickly: 'Comienza rápido o elige un modo.',
+    
+    // Onboarding
+    howOldIsYourChild: '¿Qué edad tiene tu superestrella?',
+    weWillCustomize: '¡Personalizaremos todo para su edad!',
+    pickYourFriend: '¡Elige tu amigo!',
+    whoWillHelp: '¿Quién te ayudará hoy?',
+    whatsYourName: '¿Cómo te llamas?',
+    holdToRecord: 'Mantén para grabar',
+    recording: 'Grabando...',
+    skipForNow: 'Omitir por ahora',
+    weAreReady: '¡Estamos listos!',
+    
+    // Main Screen
+    letsWorkOn: 'Trabajemos en',
+    focusTime: 'Tiempo de enfoque',
+    dayStreak: 'días seguidos',
+    studyTime: 'Tiempo de estudio',
+    startStudying: '¡Empezar a estudiar!',
+    breakTime: '¡Tiempo de descanso!',
+    finished: '¡Terminado!',
+    
+    // Subjects
+    math: 'Matemáticas',
+    reading: 'Lectura',
+    writing: 'Escritura',
+    science: 'Ciencias',
+    chemistry: 'Química',
+    biology: 'Biología',
+    history: 'Historia',
+    geography: 'Geografía',
+    other: 'Otro',
+    
+    // Check-ins
+    whatAreYouWorkingOn: '¿En qué estás trabajando?',
+    howsItGoing: '¿Cómo va?',
+    howMuchDone: '¿Cuánto has hecho?',
+    easy: '¡Fácil!',
+    ok: 'OK',
+    hard: 'Difícil',
+    needHelp: 'Necesito ayuda',
+    allDone: 'Todo listo',
+    most: 'La mayoría',
+    half: 'La mitad',
+    justStarted: 'Recién empezado',
+    
+    // Celebration
+    amazingJob: '¡Trabajo increíble!',
+    sessionComplete: 'Sesión completada',
+    todaysFocusTime: 'Tiempo de enfoque de hoy',
+    currentStreak: 'Racha actual',
+    totalFocusTime: 'Tiempo total de enfoque',
+    shareSuccess: '¡Compartir éxito!',
+    continue: 'Continuar',
+    
+    // Parent Settings
+    parentSettings: 'Ajustes para padres',
+    parentAccess: 'Acceso para padres',
+    saveSettings: 'Guardar ajustes',
+    timerSettings: 'Ajustes del temporizador',
+    workDuration: 'Duración del trabajo',
+    breakDuration: 'Duración del descanso',
+    minutes: 'minutos',
+    
+    // Calm Mode
+    startCalming: 'Empezar a calmarse',
+    breatheIn: 'Inhala',
+    breatheOut: 'Exhala',
+    breathsCount: 'respiraciones',
+    imReadyToTalk: 'Estoy listo para hablar',
+    
+    // Quick Start Labels
+    quickMath: 'Mate',
+    quickRead: 'Leer',
+    quickScience: 'Ciencias',
+    quickWrite: 'Escribir',
+    quickChem: 'Química'
+  }
+};
+
+// Current language state
+let currentLanguage = 'en';
+
+// Initialize from device settings
+export const initializeLanguage = async () => {
+  try {
+    // Try to get saved language preference
+    const savedLang = await AsyncStorage.getItem('@StudyBuddy:language');
+    if (savedLang && translations[savedLang]) {
+      currentLanguage = savedLang;
+      return;
+    }
+    
+    // Otherwise use device language
+    const deviceLang = Localization.locale.split('-')[0]; // 'en-US' -> 'en'
+    if (translations[deviceLang]) {
+      currentLanguage = deviceLang;
+    }
+  } catch (e) {
+    // Default to English
+  }
+};
+
+// Get current language
+export const getCurrentLanguage = () => currentLanguage;
+
+// Set language
+export const setLanguage = async (lang) => {
+  if (translations[lang]) {
+    currentLanguage = lang;
+    await AsyncStorage.setItem('@StudyBuddy:language', lang);
+  }
+};
+
+// Get translated string
+export const t = (key) => {
+  return translations[currentLanguage]?.[key] || translations.en[key] || key;
+};
+
+// Get all available languages
+export const getAvailableLanguages = () => [
+  { code: 'en', name: 'English', flag: '🇺🇸' },
+  { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
+  { code: 'es', name: 'Español', flag: '🇪🇸' }
+];
+
+// Format with parameters
+export const tf = (key, params = {}) => {
+  let text = t(key);
+  Object.keys(params).forEach(param => {
+    text = text.replace(`{${param}}`, params[param]);
+  });
+  return text;
+};
+```
+
+---
+
+## study-buddy/src/utils/speech.js
+```javascript
+import * as Speech from 'expo-speech';
+import { getStorageItem } from './storage';
+
+// Rate limiting
+let lastSpeechTime = 0;
+const MIN_SPEECH_INTERVAL = 1000; // Minimum 1 second between speeches
+
+// Cached settings
+let cachedSettings = {
+  mainScreenEnabled: true,
+  calmModeEnabled: true,
+  celebrationEnabled: true,
+  rate: 1.0,
+  pitch: 1.0,
+};
+
+// Load speech settings from storage
+export const loadSpeechSettings = async () => {
+  try {
+    const settings = await getStorageItem('speechSettings');
+    if (settings) {
+      cachedSettings = JSON.parse(settings);
+    }
+  } catch (e) {
+    console.log('Error loading speech settings:', e);
+  }
+  return cachedSettings;
+};
+
+// Smart speak function with rate limiting and settings respect
+export const smartSpeak = async (text, options = {}) => {
+  const {
+    screenType = 'main', // 'main', 'calm', 'celebration'
+    forceSpeak = false,  // Override rate limiting for critical messages
+    language = 'en',
+    ...speechOptions
+  } = options;
+
+  // Load latest settings
+  await loadSpeechSettings();
+
+  // Check if speech is enabled for this screen
+  const enabledKey = `${screenType}ScreenEnabled`;
+  if (!cachedSettings[enabledKey] && !forceSpeak) {
+    return;
+  }
+
+  // Rate limiting
+  const now = Date.now();
+  if (!forceSpeak && now - lastSpeechTime < MIN_SPEECH_INTERVAL) {
+    return;
+  }
+
+  // Stop any ongoing speech
+  await Speech.stop();
+
+  // Update last speech time
+  lastSpeechTime = now;
+
+  // Speak with settings
+  await Speech.speak(text, {
+    language,
+    rate: cachedSettings.rate,
+    pitch: cachedSettings.pitch,
+    ...speechOptions
+  });
+};
+
+// Stop all speech
+export const stopSpeech = async () => {
+  await Speech.stop();
+};
+
+// Check if speaking
+export const isSpeaking = async () => {
+  return await Speech.isSpeakingAsync();
+};
+```
+
+---
+
+## study-buddy/src/utils/photoManager.js
+```javascript
+import * as FileSystem from 'expo-file-system';
+import { getStorageItem, setStorageItem } from './storage';
+
+const PHOTO_DIR = FileSystem.documentDirectory + 'StudyBuddyPhotos/';
+const PHOTO_INDEX_KEY = 'photoIndex';
+
+// Ensure photo directory exists
+export const ensurePhotoDirectory = async () => {
+  const dirInfo = await FileSystem.getInfoAsync(PHOTO_DIR);
+  if (!dirInfo.exists) {
+    await FileSystem.makeDirectoryAsync(PHOTO_DIR, { intermediates: true });
+  }
+};
+
+// Save photo with metadata
+export const savePhoto = async (photoUri) => {
+  await ensurePhotoDirectory();
+  
+  const timestamp = Date.now();
+  const fileName = `homework_${timestamp}.jpg`;
+  const destUri = PHOTO_DIR + fileName;
+  
+  await FileSystem.copyAsync({
+    from: photoUri,
+    to: destUri
+  });
+  
+  // Update photo index
+  const indexStr = await getStorageItem(PHOTO_INDEX_KEY);
+  const index = indexStr ? JSON.parse(indexStr) : [];
+  index.push({ fileName, timestamp, uri: destUri });
+  await setStorageItem(PHOTO_INDEX_KEY, JSON.stringify(index));
+  
+  return destUri;
+};
+
+// Clean old photos based on settings
+export const cleanOldPhotos = async () => {
+  try {
+    const settingsStr = await getStorageItem('photoSettings');
+    const settings = settingsStr ? JSON.parse(settingsStr) : { autoDeleteDays: 7 };
+    
+    const indexStr = await getStorageItem(PHOTO_INDEX_KEY);
+    if (!indexStr) return;
+    
+    const index = JSON.parse(indexStr);
+    const now = Date.now();
+    const maxAge = settings.autoDeleteDays * 24 * 60 * 60 * 1000;
+    
+    const updatedIndex = [];
+    
+    for (const photo of index) {
+      if (now - photo.timestamp > maxAge) {
+        // Delete old photo
+        try {
+          await FileSystem.deleteAsync(photo.uri, { idempotent: true });
+        } catch (e) {
+          console.log('Error deleting photo:', e);
+        }
+      } else {
+        updatedIndex.push(photo);
+      }
+    }
+    
+    await setStorageItem(PHOTO_INDEX_KEY, JSON.stringify(updatedIndex));
+  } catch (e) {
+    console.log('Error cleaning photos:', e);
+  }
+};
+
+// Get all photos
+export const getAllPhotos = async () => {
+  const indexStr = await getStorageItem(PHOTO_INDEX_KEY);
+  return indexStr ? JSON.parse(indexStr) : [];
+};
+```
+
+---
+
+## study-buddy/src/screens/PaywallScreen.js
+```javascript
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
+  ScrollView,
+  ActivityIndicator,
+  Alert
+} from 'react-native';
+import Purchases from 'react-native-purchases';
+import { getAgeConfig, getScaledSize } from '../utils/constants';
+import { t } from '../utils/i18n';
+
+export default function PaywallScreen({ navigation, route }) {
+  const [offerings, setOfferings] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [purchasing, setPurchasing] = useState(false);
+  const ageGroup = route.params?.ageGroup || 'elementary';
+  const config = getAgeConfig(ageGroup);
+
+  useEffect(() => {
+    loadOfferings();
+  }, []);
+
+  const loadOfferings = async () => {
+    try {
+      const offerings = await Purchases.getOfferings();
+      if (offerings.current !== null) {
+        setOfferings(offerings.current);
+      }
+      setLoading(false);
+    } catch (e) {
+      console.log('Error loading offerings:', e);
+      setLoading(false);
+    }
+  };
+
+  const purchasePackage = async (packageItem) => {
+    setPurchasing(true);
+    try {
+      const { customerInfo } = await Purchases.purchasePackage(packageItem);
+      if (customerInfo.entitlements.active['premium']) {
+        Alert.alert('Success!', 'Welcome to Study Buddy Premium!', [
+          { text: 'OK', onPress: () => navigation.goBack() }
+        ]);
+      }
+    } catch (e) {
+      if (!e.userCancelled) {
+        Alert.alert('Error', 'Purchase failed. Please try again.');
+      }
+    }
+    setPurchasing(false);
+  };
+
+  const restorePurchases = async () => {
+    setPurchasing(true);
+    try {
+      const customerInfo = await Purchases.restorePurchases();
+      if (customerInfo.entitlements.active['premium']) {
+        Alert.alert('Success!', 'Your purchase has been restored!', [
+          { text: 'OK', onPress: () => navigation.goBack() }
+        ]);
+      } else {
+        Alert.alert('No Purchases', 'No previous purchases found.');
+      }
+    } catch (e) {
+      Alert.alert('Error', 'Could not restore purchases.');
+    }
+    setPurchasing(false);
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: config.secondaryColor }]}>
+        <ActivityIndicator size="large" color={config.primaryColor} />
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: config.secondaryColor }]}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Header */}
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeButton}>
+          <Text style={styles.closeText}>✕</Text>
+        </TouchableOpacity>
+
+        {/* Title */}
+        <Text style={[styles.title, { color: config.primaryColor }]}>
+          Study Buddy Premium
+        </Text>
+
+        {/* Benefits */}
+        <View style={styles.benefitsContainer}>
+          <Text style={styles.benefitTitle}>Unlock Everything:</Text>
+          {[
+            '✓ Unlimited study sessions',
+            '✓ All buddy characters',
+            '✓ Custom encouragement messages',
+            '✓ Detailed progress reports',
+            '✓ Photo history gallery',
+            '✓ Ad-free forever'
+          ].map((benefit, index) => (
+            <Text key={index} style={styles.benefitItem}>{benefit}</Text>
+          ))}
+        </View>
+
+        {/* Packages */}
+        {offerings && offerings.availablePackages.map((pkg) => (
+          <TouchableOpacity
+            key={pkg.identifier}
+            style={[
+              styles.packageButton,
+              { backgroundColor: config.primaryColor }
+            ]}
+            onPress={() => purchasePackage(pkg)}
+            disabled={purchasing}
+          >
+            <Text style={styles.packageTitle}>{pkg.product.title}</Text>
+            <Text style={styles.packagePrice}>
+              {pkg.product.priceString}
+              {pkg.packageType === 'MONTHLY' && '/month'}
+              {pkg.packageType === 'ANNUAL' && '/year'}
+            </Text>
+            {pkg.packageType === 'ANNUAL' && (
+              <Text style={styles.savingsText}>Save 33%!</Text>
+            )}
+          </TouchableOpacity>
+        ))}
+
+        {/* Restore Button */}
+        <TouchableOpacity
+          style={styles.restoreButton}
+          onPress={restorePurchases}
+          disabled={purchasing}
+        >
+          <Text style={styles.restoreText}>Restore Purchases</Text>
+        </TouchableOpacity>
+
+        {/* Terms */}
+        <Text style={styles.terms}>
+          Subscriptions auto-renew. Cancel anytime in app store settings.
+        </Text>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  closeButton: {
+    alignSelf: 'flex-end',
+    padding: 10,
+  },
+  closeText: {
+    fontSize: 24,
+    color: '#7F8C8D',
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  benefitsContainer: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 30,
+    width: '100%',
+  },
+  benefitTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  benefitItem: {
+    fontSize: 16,
+    marginBottom: 10,
+    color: '#2C3E50',
+  },
+  packageButton: {
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 15,
+    width: '100%',
+    alignItems: 'center',
+  },
+  packageTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: 'white',
+    marginBottom: 5,
+  },
+  packagePrice: {
+    fontSize: 24,
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  savingsText: {
+    fontSize: 14,
+    color: '#FFE5B4',
+    marginTop: 5,
+  },
+  restoreButton: {
+    marginTop: 20,
+    padding: 15,
+  },
+  restoreText: {
+    fontSize: 16,
+    color: '#3498DB',
+    textDecorationLine: 'underline',
+  },
+  terms: {
+    fontSize: 12,
+    color: '#7F8C8D',
+    textAlign: 'center',
+    marginTop: 20,
+    paddingHorizontal: 20,
+  },
+});
+```
+
+---
+
+## study-buddy/src/utils/storage.js
+```javascript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const STORAGE_PREFIX = '@StudyBuddy:';
+
+export const setStorageItem = async (key, value) => {
+  try {
+    await AsyncStorage.setItem(STORAGE_PREFIX + key, value);
+    return true;
+  } catch (error) {
+    console.error('Error saving to storage:', error);
+    return false;
+  }
+};
+
+export const getStorageItem = async (key) => {
+  try {
+    const value = await AsyncStorage.getItem(STORAGE_PREFIX + key);
+    return value;
+  } catch (error) {
+    console.error('Error reading from storage:', error);
+    return null;
+  }
+};
+
+export const removeStorageItem = async (key) => {
+  try {
+    await AsyncStorage.removeItem(STORAGE_PREFIX + key);
+    return true;
+  } catch (error) {
+    console.error('Error removing from storage:', error);
+    return false;
+  }
+};
+
+export const clearAllStorage = async () => {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const studyBuddyKeys = keys.filter(key => key.startsWith(STORAGE_PREFIX));
+    await AsyncStorage.multiRemove(studyBuddyKeys);
+    return true;
+  } catch (error) {
+    console.error('Error clearing storage:', error);
+    return false;
+  }
+};
+```
+
+---
+
+## study-buddy/src/utils/audio.js
+```javascript
+import { Audio } from 'expo-av';
+import * as Speech from 'expo-speech';
+
+export const playSound = async (soundFile) => {
+  try {
+    const { sound } = await Audio.Sound.createAsync(soundFile);
+    await sound.playAsync();
+    
+    // Unload sound after playing
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.didJustFinish) {
+        sound.unloadAsync();
+      }
+    });
+  } catch (error) {
+    console.error('Error playing sound:', error);
+  }
+};
+
+export const speak = (text, options = {}) => {
+  const defaultOptions = {
+    language: 'en',
+    pitch: 1.1,
+    rate: 0.9,
+    ...options
+  };
+  
+  Speech.speak(text, defaultOptions);
+};
+
+export const stopSpeaking = () => {
+  Speech.stop();
+};
+
+export const configureSpeech = async () => {
+  // Check if speech is available
+  const available = await Speech.getAvailableVoicesAsync();
+  return available;
+};
+```
+
+---
+
+## study-buddy/src/assets/animations/buddy-animations.js
+```javascript
+// ===================================
+// MODULAR BUDDY SYSTEM
+// Data-driven buddy configurations
+// ===================================
+
+// Buddy personality templates
+const BUDDY_PERSONALITIES = {
+  energetic: {
+    sounds: ['boing', 'yay', 'woohoo'],
+    animationStyle: 'bouncy',
+    description: 'super excited and encouraging'
+  },
+  magical: {
+    sounds: ['sparkle', 'magic', 'chime'],
+    animationStyle: 'mystical',
+    description: 'magical and supportive'
+  },
+  friendly: {
+    sounds: ['roar', 'stomp', 'growl'],
+    animationStyle: 'strong',
+    description: 'friendly and brave'
+  },
+  playful: {
+    sounds: ['purr', 'meow', 'chirp'],
+    animationStyle: 'gentle',
+    description: 'playful and encouraging'
+  },
+  loyal: {
+    sounds: ['woof', 'bark', 'pant'],
+    animationStyle: 'steady',
+    description: 'loyal and supportive'
+  },
+  smart: {
+    sounds: ['beep', 'boop', 'whir'],
+    animationStyle: 'precise',
+    description: 'smart and helpful'
+  },
+  cool: {
+    sounds: ['roar', 'fire', 'whoosh'],
+    animationStyle: 'powerful',
+    description: 'cool and powerful'
+  },
+  focused: {
+    sounds: ['howl', 'growl', 'breath'],
+    animationStyle: 'calm',
+    description: 'focused and strong'
+  },
+  mysterious: {
+    sounds: ['beep', 'whoosh', 'hum'],
+    animationStyle: 'ethereal',
+    description: 'chill and mysterious'
+  },
+  minimal: {
+    sounds: ['pulse', 'hum', 'tone'],
+    animationStyle: 'subtle',
+    description: 'minimal and focused'
+  },
+  zen: {
+    sounds: ['rustle', 'grow', 'flow'],
+    animationStyle: 'organic',
+    description: 'calm and growing'
+  },
+  mystical: {
+    sounds: ['chime', 'glow', 'resonate'],
+    animationStyle: 'floating',
+    description: 'mystical and serene'
+  }
+};
+
+// Age-specific buddy templates
+const BUDDY_TEMPLATES = {
+  young: [
+    {
+      id: 'bunny',
+      name: 'Bouncy',
+      emoji: '🐰',
+      baseColor: '#FFB6C1',
+      personality: 'energetic'
+    },
+    {
+      id: 'unicorn',
+      name: 'Sparkles', 
+      emoji: '🦄',
+      baseColor: '#E6E6FA',
+      personality: 'magical'
+    },
+    {
+      id: 'dino',
+      name: 'Rex',
+      emoji: '🦕',
+      baseColor: '#98FB98',
+      personality: 'friendly'
+    }
+  ],
+  
+  elementary: [
+    {
+      id: 'cat',
+      name: 'Whiskers',
+      emoji: '🐱',
+      baseColor: '#FFD93D',
+      personality: 'playful'
+    },
+    {
+      id: 'dog',
+      name: 'Buddy',
+      emoji: '🐶',
+      baseColor: '#8B4513',
+      personality: 'loyal'
+    },
+    {
+      id: 'robot',
+      name: 'Beep',
+      emoji: '🤖',
+      baseColor: '#C0C0C0',
+      personality: 'smart'
+    }
+  ],
+  
+  tween: [
+    {
+      id: 'dragon',
+      name: 'Blaze',
+      emoji: '🐉',
+      baseColor: '#FF6B6B',
+      personality: 'cool'
+    },
+    {
+      id: 'wolf',
+      name: 'Shadow',
+      emoji: '🐺',
+      baseColor: '#4A5568',
+      personality: 'focused'
+    },
+    {
+      id: 'alien',
+      name: 'Cosmic',
+      emoji: '👽',
+      baseColor: '#00D9FF',
+      personality: 'mysterious'
+    }
+  ],
+  
+  teen: [
+    {
+      id: 'geometric',
+      name: 'Hex',
+      emoji: '⬡',
+      baseColor: '#7C3AED',
+      personality: 'minimal'
+    },
+    {
+      id: 'plant',
+      name: 'Zen',
+      emoji: '🌱',
+      baseColor: '#10B981',
+      personality: 'zen'
+    },
+    {
+      id: 'orb',
+      name: 'Focus',
+      emoji: '🔮',
+      baseColor: '#EC4899',
+      personality: 'mystical'
+    }
+  ]
+};
+
+// Generate complete buddy objects with personality traits
+function generateBuddiesForAge(ageGroup) {
+  const templates = BUDDY_TEMPLATES[ageGroup] || BUDDY_TEMPLATES.elementary;
+  
+  return templates.map(template => {
+    const personality = BUDDY_PERSONALITIES[template.personality];
+    
+    return {
+      ...template,
+      color: template.baseColor,
+      sounds: personality.sounds,
+      animationStyle: personality.animationStyle,
+      description: personality.description
+    };
+  });
+}
+
+// Export age-specific buddy configurations
+export const BUDDIES_BY_AGE = Object.fromEntries(
+  Object.keys(BUDDY_TEMPLATES).map(ageGroup => [
+    ageGroup,
+    generateBuddiesForAge(ageGroup)
+  ])
+);
+
+// Fallback for old code
+export const BUDDIES = BUDDIES_BY_AGE.elementary;
+
+// Animation file references (for Lottie)
+export const ANIMATIONS = {
+  studying: 'studying.json',
+  celebrating: 'celebrating.json',
+  idle: 'idle.json',
+  encouraging: 'encouraging.json',
+  confetti: 'confetti.json'
+};
+
+// Utility functions for buddy system
+export const getBuddyForAge = (ageGroup, buddyId) => {
+  const buddies = BUDDIES_BY_AGE[ageGroup] || BUDDIES_BY_AGE.elementary;
+  return buddies.find(buddy => buddy.id === buddyId) || buddies[0];
+};
+
+export const getBuddiesForAge = (ageGroup) => {
+  return BUDDIES_BY_AGE[ageGroup] || BUDDIES_BY_AGE.elementary;
+};
+```
+
+---
+
+## study-buddy/README.md
+```markdown
+# Study Buddy - ADHD Focus Friend
+
+A simple, focused app that provides a virtual "body double" for children with ADHD to help them stay on task during homework and study time.
+
+## 🎯 Core Concept
+
+Study Buddy is a virtual companion that sits with your child while they work, providing gentle encouragement and accountability without the need for constant parent supervision.
+
+## 🏗️ Modular Architecture Features
+
+### ✅ Configuration-Driven Design
+- **Single source of truth** - All behavior controlled from one config file
+- **No hardcoded values** - Every timing, size, color comes from configuration
+- **Easy customization** - Change one value, updates everywhere automatically
+- **Age-responsive** - UI automatically scales for different age groups
+- **Future-proof** - Add new age groups by adding data, not code
+
+### ✅ Flexible Content System
+- **Dynamic message generation** - Content adapts to age and personality
+- **Modular subjects** - Easy to add new subjects without code changes
+- **Personality-driven** - Buddy behavior determined by personality templates
+- **Responsive UI** - Automatically adapts to different screen sizes
+
+### ✅ Maintainable Codebase
+- **Centralized timing** - All delays and durations in one place
+- **Computed configurations** - Complex logic generated from simple data
+- **Scalable design** - Components adapt automatically to configuration changes
+- **Clean separation** - Data, logic, and presentation clearly separated
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Node.js 16+ 
+- Expo CLI (`npm install -g expo-cli`)
+- iOS Simulator (Mac) or Android Studio (Windows/Mac/Linux)
+- Expo Go app on your phone for testing
+
+### Installation
+
+1. Clone the repository
+```bash
+git clone https://github.com/yourusername/study-buddy.git
+cd study-buddy
+```
+
+2. Install dependencies
+```bash
+npm install
+```
+
+3. Start the development server
+```bash
+expo start
+```
+
+4. Run on your device
+- Scan QR code with Expo Go (Android)
+- Scan QR code with Camera (iOS)
+
+### Building for Production
+
+#### iOS
+```bash
+expo build:ios
+```
+
+#### Android
+```bash
+expo build:android
+```
+
+## 📱 Features
+
+### MVP Features (Current)
+- 🐱 Choose from age-appropriate study buddy characters
+- 🎤 Record child's name for personalization
+- ⏰ Visual study timer with breaks
+- 💬 Encouraging check-in messages (frequency configurable)
+- 🎉 Age-appropriate celebration screens
+- 📊 Basic progress tracking (streak, total time)
+- ⚙️ Parent settings (protected by age-appropriate math)
+- 🔇 Customizable sounds and vibrations
+- 📤 Share achievements with family
+- 🧘 Calm mode for emotional regulation
+- 📸 Optional homework photo verification
+
+### Configuration Benefits
+- **Easy age addition** - Add new age group by adding data object
+- **Flexible timing** - All timers configurable without code changes
+- **Responsive design** - Automatically adapts to any screen size
+- **Modular content** - Messages, subjects, personalities all data-driven
+- **Theme system** - Colors and styling computed from age configuration
+
+## 🔧 Customization Guide
+
+### Adding New Age Group
+```javascript
+// In constants.js, add to AGE_GROUP_TEMPLATES:
+newAge: {
+  id: 'newAge',
+  ageRange: [16, 18],
+  displayRange: '16-18',
+  session: { defaultDuration: 30, breakDuration: 7, ... },
+  voice: { pitch: 0.9, rate: 1.0 },
+  theme: { primary: '#FF5722', secondary: '#FFEBEE', accent: '#D84315' },
+  personality: { encouragementLevel: 'low', celebrationStyle: 'minimal', ... }
+}
+```
+
+### Changing Global Timing
+```javascript
+// In TIMING_CONFIG, update any value:
+session: {
+  buddyFadeDelay: 45 * 1000, // Change from 60 to 45 seconds
+  checkInDisplay: 7 * 1000,  // Change from 5 to 7 seconds
+  ...
+}
+```
+
+### Adding New Subjects
+```javascript
+// In SUBJECT_SYSTEM.subjects, add new subject:
+physics: { 
+  id: 'physics', label: 'Physics', emoji: '⚛️', 
+  category: 'stem', difficulty: 'hard',
+  checkIns: ['Think about forces', 'Check your units', ...]
+}
+
+// Add to age group arrays:
+ageGroups: {
+  teen: ['math', 'reading', 'writing', 'science', 'physics', ...]
+}
+```
+
+## 🎨 Design Principles
+
+1. **ADHD-First Design**
+   - Large touch targets (configurable by age)
+   - High contrast colors (theme-based)
+   - Minimal distractions (personality-driven)
+   - Clear visual hierarchy (responsive scaling)
+
+2. **Child-Friendly**
+   - Fun characters and animations (personality system)
+   - Positive reinforcement only (encouragement levels)
+   - Age-appropriate language (complexity templates)
+   - No failure states (always encouraging)
+
+3. **Parent-Respectful**
+   - No login friction (local storage only)
+   - Quick setup (30 seconds with smart defaults)
+   - Hidden settings (age-appropriate math gates)
+   - Works offline (no backend dependencies)
+
+## 💰 Monetization
+
+### Free Trial
+- 14 days fully featured
+- No credit card required
+- Gentle reminder after trial
+
+### Premium ($4.99/month)
+- Unlimited study sessions
+- Multiple buddy characters
+- Parent voice recordings
+- Progress reports
+- Priority support
+
+## 🚀 Deployment
+
+### App Store Checklist
+- [ ] App icon (1024x1024)
+- [ ] Screenshots (iPhone & iPad)
+- [ ] App description
+- [ ] Privacy policy
+- [ ] Terms of service
+- [ ] COPPA compliance statement
+
+### Google Play Checklist
+- [ ] App icon (512x512)
+- [ ] Feature graphic (1024x500)
+- [ ] Screenshots (phone & tablet)
+- [ ] Short description (80 chars)
+- [ ] Full description
+- [ ] Privacy policy URL
+
+## 📊 Success Metrics
+
+### Target Metrics (Month 1)
+- 200 downloads
+- 60% trial-to-paid conversion
+- 80% day-7 retention
+- 4.5+ star rating
+
+### Key Events to Track
+- Onboarding completion
+- First study session
+- Session duration
+- Streak maintenance
+- Trial conversion
+
+## 🤝 Support
+
+### For Parents
+- In-app help guide
+- Email: support@studybuddy.app
+- FAQ website
+- ADHD parent community forum
+
+### For Developers
+- GitHub issues
+- Contributing guidelines
+- Code of conduct
+- Development Discord
+
+## 📄 License
+
+MIT License - See LICENSE file for details
+
+## 🙏 Acknowledgments
+
+- ADHD parent community for feedback
+- Lottie for animations
+- Expo team for amazing tools
+- All the ADHD kids who inspired this
+
+---
+
+## Next Steps for Enhancement
+
+### Phase 2 Features (Months 2-3)
+- [ ] Multiple child profiles
+- [ ] Custom buddy creation
+- [ ] School schedule integration
+- [ ] Weekly parent reports
+- [ ] Cloud backup with email
+
+### Phase 3 Features (Months 4-6)
+- [ ] Study groups (virtual co-working)
+- [ ] Teacher collaboration portal
+- [ ] Reward shop with real rewards
+- [ ] AI-powered break suggestions
+- [ ] Apple Watch companion app
+
+### Configuration Expansions
+- [ ] Custom theme creation
+- [ ] User-generated content system
+- [ ] A/B testing framework
+- [ ] Remote configuration updates
+- [ ] Advanced personalization engine
+
+## Production-Ready Testing Implementation
+
+### E2E Test Setup (Detox)
+
+#### Installation
+```bash
+npm install --save-dev detox @types/detox jest
+npm install --save-dev detox-expo-helpers expo-detox-hook
+npx detox init -r jest
+```
+
+### Manual Testing Checklist
+- [ ] Onboarding flow completes
+- [ ] Buddy animates properly
+- [ ] Check-ins via notifications when backgrounded
+- [ ] Check-ins appear on schedule
+- [ ] Celebration shows correct stats
+- [ ] Parent settings save
+- [ ] App works offline
+- [ ] Sounds/vibrations work
+- [ ] Responsive design on different screens
+
+### Configuration Testing
+- [ ] Age group switching works
+- [ ] UI scales appropriately
+- [ ] Timing changes take effect
+- [ ] Content updates correctly
+- [ ] Theme colors apply properly
+
+### Device Testing
+- [ ] iPhone SE (small screen)
+- [ ] iPhone 14 Pro (standard)
+- [ ] iPad (tablet)
+- [ ] Android phone (various)
+- [ ] Android tablet
+
+### E2E Test Examples
+
+#### Critical Path Test (e2e/critical-path.test.js)
+```javascript
+describe('Critical User Journey', () => {
+  it('completes onboarding in under 30 seconds', async () => {
+    await device.launchApp({ newInstance: true });
+    const startTime = Date.now();
+    
+    await expect(element(by.id('welcome-screen'))).toBeVisible();
+    await element(by.id('age-8-10')).tap();
+    await element(by.id('buddy-cat')).tap();
+    await element(by.id('start-button')).tap();
+    await expect(element(by.id('mode-selection'))).toBeVisible();
+    
+    expect(Date.now() - startTime).toBeLessThan(30000);
+  });
+  
+  it('completes full study session', async () => {
+    await element(by.id('study-mode-button')).tap();
+    await element(by.id('subject-math')).tap();
+    await expect(element(by.id('timer-display'))).toBeVisible();
+    
+    // Simulate check-in
+    await device.shake();
+    await element(by.text('Trigger Check-in')).tap();
+    await expect(element(by.id('checkin-modal'))).toBeVisible();
+    
+    await element(by.id('end-session-button')).tap();
+    await expect(element(by.id('celebration-screen'))).toBeVisible();
+  });
+});
+```
+
+### Performance & Security Additions
+
+#### Add to App.js for crash reporting:
+```javascript
+import * as Sentry from '@sentry/react-native';
+
+Sentry.init({
+  dsn: 'YOUR_SENTRY_DSN',
+  environment: __DEV__ ? 'development' : 'production',
+});
+
+// Wrap app in ErrorBoundary
+class ErrorBoundary extends React.Component {
+  componentDidCatch(error, errorInfo) {
+    Sentry.captureException(error, { extra: errorInfo });
+  }
+  
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ fontSize: 50 }}>😢</Text>
+          <Text>Oops! Your buddy needs a quick break.</Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+```
+
+## Revenue Projections
+
+### Conservative Estimate
+- Month 1: 200 users × 60% conversion × $4.99 = $599
+- Month 2: 400 users × 60% conversion × $4.99 = $1,197
+- Month 3: 600 users × 60% conversion × $4.99 = $1,796
+
+### Growth Strategy
+1. Launch in ADHD Facebook groups
+2. Partner with ADHD influencers
+3. School counselor outreach
+4. Pediatrician recommendations
+5. App Store optimization
+
+## Contact
+
+**Creator:** [Your Name]
+**Email:** developer@studybuddy.app
+**Website:** https://studybuddy.app
+**Twitter:** @studybuddyapp
+
+---
+
+*Built with ❤️ for ADHD families*
