@@ -42,7 +42,9 @@ export default function App() {
     const sub = Notifications.addNotificationResponseReceivedListener(async (response) => {
       try {
         await setStorageItem('lastNotifAction', response.actionIdentifier || '');
-      } catch (e) {}
+      } catch (e) {
+        // Silent fail for notification action storage
+      }
     });
     return () => sub.remove();
   }, []);

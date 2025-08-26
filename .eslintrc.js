@@ -4,6 +4,7 @@ module.exports = {
     es2021: true,
     node: true,
     'react-native/react-native': true,
+    jest: true, // Add Jest globals
   },
   extends: [
     'eslint:recommended',
@@ -26,12 +27,21 @@ module.exports = {
     'react-native/no-inline-styles': 'warn',
     'react-native/no-color-literals': 'warn',
     'react-native/no-raw-text': 'off', // We'll handle this manually
+    'react-native/sort-styles': 'off', // Disable for now - too strict
     'no-console': 'warn', // Warn about console.log in production
-    'no-unused-vars': 'warn',
+    'no-unused-vars': 'warn', // Change from error to warning
+    'no-undef': 'error', // Keep this as error
+    'react/no-unescaped-entities': 'warn', // Change from error to warning
   },
-  settings: {
-    react: {
-      version: 'detect',
-    },
+  globals: {
+    // Jest globals
+    jest: 'readonly',
+    describe: 'readonly',
+    it: 'readonly',
+    expect: 'readonly',
+    beforeEach: 'readonly',
+    afterEach: 'readonly',
+    beforeAll: 'readonly',
+    afterAll: 'readonly',
   },
 };

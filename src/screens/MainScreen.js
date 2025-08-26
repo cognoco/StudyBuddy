@@ -30,7 +30,8 @@ import {
   getMysteryMondayChange,
   getCurrentSeasonalTheme,
   getScaledSize,
-  TIMING_CONFIG
+  TIMING_CONFIG,
+  generateParentGate
 } from '../utils/constants';
 
 const { width, height } = Dimensions.get('window');
