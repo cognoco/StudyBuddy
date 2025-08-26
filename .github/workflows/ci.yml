@@ -40,7 +40,7 @@ jobs:
       run: npx expo export --platform web --clear
       
     - name: Upload test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: test-results
@@ -75,7 +75,7 @@ jobs:
       run: npx expo export --platform all
       
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: app-build
         path: dist/

@@ -8,7 +8,7 @@ import {
   Dimensions,
   Modal
 } from 'react-native';
-import { getStorageItem } from '../utils/storage';
+import { getStorageItem, setStorageItem } from '../utils/storage';
 import { 
   getAgeConfig, 
   getSubjectsForAge,
@@ -145,6 +145,36 @@ export default function ModeSelectionScreen({ navigation }) {
           ]}>
             Start quickly or pick a mode below.
           </Text>
+          
+          {/* Reset Button */}
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#FF6B6B',
+              paddingHorizontal: 20,
+              paddingVertical: 8,
+              borderRadius: 15,
+              marginTop: 10,
+              marginBottom: 10,
+            }}
+            onPress={async () => {
+              try {
+                // Clear storage
+                await setStorageItem('hasLaunched', null);
+                await setStorageItem('selectedAge', null);
+                
+                // Simple navigation to onboarding
+                navigation.navigate('Onboarding');
+              } catch (error) {
+                console.log('Reset error:', error);
+                // Fallback: just navigate
+                navigation.navigate('Onboarding');
+              }
+            }}
+          >
+            <Text style={{ color: 'white', fontWeight: '600', fontSize: 12 }}>
+              🔄 Reset App
+            </Text>
+          </TouchableOpacity>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginTop: 10 }}>
             {getQuickStarts(ageGroup).map((qs) => (
               <TouchableOpacity

@@ -18,12 +18,14 @@ import {
   getScaledSize,
   TIMING_CONFIG
 } from '../utils/constants';
+import { smartSpeak } from '../utils/speech';
+import { getPersonalizedMessage } from '../utils/teacherVoices';
 import { SubscriptionContext } from '../../App';
 
 const { width, height } = Dimensions.get('window');
 
 export default function CelebrationScreen({ navigation, route }) {
-  const { sessionTime, totalTime, streak, ageGroup, workPhoto, sessionLog } = route.params;
+  const { sessionTime, totalTime, streak, ageGroup, workPhoto, sessionLog, subjectId } = route.params;
   const animationRef = useRef(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const [whatWorked, setWhatWorked] = useState([]);
@@ -53,18 +55,28 @@ export default function CelebrationScreen({ navigation, route }) {
 
   const celebrate = () => {
     const config = getAgeConfig(ageGroup);
-    const celebrationMessage = getCelebrationMessage(ageGroup, sessionTime);
     
-    // Play celebration sound
-    Speech.stop();
-    Speech.speak(celebrationMessage, {
-      language: 'en',
-      pitch: config.voicePitch + 0.1, // Slightly higher for celebration
-      rate: config.voiceRate
+    // Use teacher voice for celebration if subject is available
+    let celebrationMessage;
+    if (subjectId) {
+      celebrationMessage = getPersonalizedMessage(subjectId, 'celebration');
+    } else {
+      celebrationMessage = getCelebrationMessage(ageGroup, sessionTime);
+    }
+    
+    // Use smartSpeak with teacher voice
+    smartSpeak(celebrationMessage, {
+      screenType: 'celebration',
+      subjectId: subjectId,
+      forceSpeak: true
     });
 
     // Haptic feedback
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      // Haptics not available on web
+    }
     
     // Play animation
     if (animationRef.current) {

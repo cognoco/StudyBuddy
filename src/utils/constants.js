@@ -471,7 +471,7 @@ export const GAMIFICATION_CONFIG = {
 // ===================================
 
 // Generate parent gate questions
-function generateParentGate(ageTemplate) {
+export function generateParentGate(ageTemplate) {
   const { minNumber, maxNumber, operation } = ageTemplate.parentGate;
   const a = Math.floor(Math.random() * (maxNumber - minNumber)) + minNumber;
   const b = Math.floor(Math.random() * (maxNumber - minNumber)) + minNumber;
@@ -650,6 +650,8 @@ export const getMysteryMondayChange = () => {
   const changes = GAMIFICATION_CONFIG.mysteryMonday;
   return changes[weekNumber % changes.length];
 };
+
+
 
 // ===================================
 // BACKWARD COMPATIBILITY EXPORTS

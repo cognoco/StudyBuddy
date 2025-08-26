@@ -1,5 +1,6 @@
 import * as Speech from 'expo-speech';
 import { getStorageItem } from './storage';
+import { getTeacherVoice } from './teacherVoices';
 
 // Rate limiting
 let lastSpeechTime = 0;
@@ -33,6 +34,7 @@ export const smartSpeak = async (text, options = {}) => {
     screenType = 'main', // 'main', 'calm', 'celebration'
     forceSpeak = false,  // Override rate limiting for critical messages
     language = 'en',
+    subjectId = null,    // Subject ID for teacher voice
     ...speechOptions
   } = options;
 
@@ -43,6 +45,12 @@ export const smartSpeak = async (text, options = {}) => {
   const enabledKey = `${screenType}ScreenEnabled`;
   if (!cachedSettings[enabledKey] && !forceSpeak) {
     return;
+  }
+
+  // Get teacher voice if subject is provided
+  let teacherVoice = null;
+  if (subjectId) {
+    teacherVoice = getTeacherVoice(subjectId);
   }
 
   // Rate limiting
@@ -57,13 +65,21 @@ export const smartSpeak = async (text, options = {}) => {
   // Update last speech time
   lastSpeechTime = now;
 
-  // Speak with settings
-  await Speech.speak(text, {
+  // Use teacher voice settings if available, otherwise use cached settings
+  const finalSettings = teacherVoice ? {
+    language: teacherVoice.voice.language,
+    rate: cachedSettings.rate * teacherVoice.voice.rate,
+    pitch: cachedSettings.pitch * teacherVoice.voice.pitch,
+    ...speechOptions
+  } : {
     language,
     rate: cachedSettings.rate,
     pitch: cachedSettings.pitch,
     ...speechOptions
-  });
+  };
+
+  // Speak with settings
+  await Speech.speak(text, finalSettings);
 };
 
 // Stop all speech
