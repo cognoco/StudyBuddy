@@ -41,7 +41,10 @@
     "react-native-purchases": "^7.0.0",
     "@react-native-community/slider": "4.4.2",
     "expo-localization": "~14.2.0",
-    "expo-file-system": "~15.4.5"
+    "expo-file-system": "~15.4.5",
+    "react-native-web": "~0.19.6",
+    "react-dom": "18.2.0",
+    "@expo/webpack-config": "^19.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
@@ -59,7 +62,9 @@
   "private": true,
   "jest": {
     "preset": "jest-expo",
-    "setupFilesAfterEnv": ["@testing-library/jest-native/extend-expect"],
+    "setupFilesAfterEnv": [
+      "@testing-library/jest-native/extend-expect"
+    ],
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg)"
     ],

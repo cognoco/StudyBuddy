@@ -33,8 +33,12 @@ export default function BigButton({
     }).start();
   };
 
-  const handlePress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  const handlePress = async () => {
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (error) {
+      // Haptics not available on web, continue without haptic feedback
+    }
     onPress();
   };
 

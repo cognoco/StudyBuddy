@@ -17,6 +17,7 @@ import { Camera } from 'expo-camera';
 import * as Notifications from 'expo-notifications';
 import { getStorageItem, setStorageItem } from '../utils/storage';
 import { smartSpeak, stopSpeech } from '../utils/speech';
+import { getPersonalizedMessage, getTeacherVoice } from '../utils/teacherVoices';
 import BuddyCharacter from '../components/BuddyCharacter';
 import StudyTimer from '../components/StudyTimer';
 import CheckInMessage from '../components/CheckInMessage';
@@ -165,10 +166,11 @@ export default function MainScreen({ navigation, route }) {
     // Setup all timers using configured values
     setupSessionTimers(config);
     
-    // Initial encouragement
-    smartSpeak(`Let's work on ${subject.label}! ${config.startMessage}`, {
+    // Get personalized message from teacher
+    const teacherMessage = getPersonalizedMessage(subject.id, 'encouragement');
+    smartSpeak(`Let's work on ${subject.label}! ${teacherMessage}`, {
       screenType: 'main',
-      language: 'en'
+      subjectId: subject.id
     });
     
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -266,44 +268,50 @@ export default function MainScreen({ navigation, route }) {
       [{ text: 'Awesome!', style: 'default' }]
     );
     
-    const config = getAgeConfig(ageGroup);
-    Speech.stop();
-    Speech.speak(surprise.message, {
-      language: 'en',
-      pitch: config.voicePitch + 0.1, // Slightly higher for excitement
-      rate: config.voiceRate
+    // Use teacher voice for surprise message
+    smartSpeak(surprise.message, {
+      screenType: 'main',
+      subjectId: currentSubject?.id,
+      forceSpeak: true
     });
     
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      // Haptics not available on web
+    }
   };
 
   const showCheckInMessage = () => {
     const config = getAgeConfig(ageGroup);
     
-    // Use subject-specific messages if available, otherwise age-appropriate messages
-    let messages;
+    // Use teacher voice if subject is available, otherwise use default messages
+    let message;
     if (currentSubject) {
-      messages = getSubjectCheckIns(currentSubject.id);
+      message = getPersonalizedMessage(currentSubject.id, 'encouragement');
     } else {
-      messages = config.checkInMessages;
+      const messages = config.checkInMessages;
+      message = messages[Math.floor(Math.random() * messages.length)];
     }
     
-    const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-    setCheckInMessage(randomMessage);
+    setCheckInMessage(message);
     setShowCheckIn(true);
     
     // Temporarily show buddy, then fade again
     setBuddyFaded(false);
     setTimeout(() => setBuddyFaded(true), TIMING_CONFIG.session.checkInDisplay);
     
-    Speech.stop();
-    Speech.speak(randomMessage.replace(/[^\w\s]/gi, ''), {
-      language: 'en',
-      pitch: config.voicePitch,
-      rate: config.voiceRate
+    // Use smartSpeak with teacher voice
+    smartSpeak(message, {
+      screenType: 'main',
+      subjectId: currentSubject?.id
     });
     
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (error) {
+      // Haptics not available on web
+    }
     
     setTimeout(() => setShowCheckIn(false), TIMING_CONFIG.session.checkInDisplay);
   };
@@ -322,12 +330,10 @@ export default function MainScreen({ navigation, route }) {
       }
     }, TIMING_CONFIG.session.modalTimeout);
     
-    const config = getAgeConfig(ageGroup);
-    Speech.stop();
-    Speech.speak(randomQuestion.text, {
-      language: 'en',
-      pitch: config.voicePitch,
-      rate: config.voiceRate
+    // Use teacher voice for interaction questions
+    smartSpeak(randomQuestion.text, {
+      screenType: 'main',
+      subjectId: currentSubject?.id
     });
   };
 
@@ -411,12 +417,10 @@ export default function MainScreen({ navigation, route }) {
     };
     
     if (encouragements[responseValue]) {
-      const config = getAgeConfig(ageGroup);
-      Speech.stop();
-      Speech.speak(encouragements[responseValue], {
-        language: 'en',
-        pitch: config.voicePitch,
-        rate: config.voiceRate
+      // Use teacher voice for feedback
+      smartSpeak(encouragements[responseValue], {
+        screenType: 'main',
+        subjectId: currentSubject?.id
       });
     }
   };
@@ -510,7 +514,8 @@ export default function MainScreen({ navigation, route }) {
       streak: currentStreak + 1,
       ageGroup: ageGroup,
       workPhoto: workPhoto,
-      sessionLog: sessionLog
+      sessionLog: sessionLog,
+      subjectId: currentSubject?.id
     });
   };
 
@@ -534,11 +539,10 @@ export default function MainScreen({ navigation, route }) {
 
   const showEncouragement = () => {
     const config = getAgeConfig(ageGroup);
-    Speech.stop();
-    Speech.speak(config.welcomeBackMessage, {
-      language: 'en',
-      pitch: config.voicePitch,
-      rate: config.voiceRate
+    // Use teacher voice for welcome back message
+    smartSpeak(config.welcomeBackMessage, {
+      screenType: 'main',
+      subjectId: currentSubject?.id
     });
   };
 
