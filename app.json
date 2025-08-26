@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Study Buddy",
+    "slug": "study-buddy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#4A90E2"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.focusflow.studybuddy",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Study Buddy needs microphone access to record encouraging messages.",
+        "NSCameraUsageDescription": "Study Buddy uses the camera to take an optional photo of completed homework.",
+        "NSPhotoLibraryAddUsageDescription": "Study Buddy saves homework photos to your device only.",
+        "UIFileSharingEnabled": false,
+        "LSSupportsOpeningDocumentsInPlace": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#4A90E2"
+      },
+      "package": "com.focusflow.studybuddy",
+      "versionCode": 1,
+      "permissions": ["RECORD_AUDIO", "VIBRATE", "CAMERA"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "your-project-id"
+      }
+    }
+  }
+}
