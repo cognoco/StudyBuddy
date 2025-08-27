@@ -1,43 +1,18 @@
 {
   "mcpServers": {
-    "context7-mcp": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp@latest"
-      ]
-    },
-    "sequential-thinking-mcp": {
+    "sequential-thinking": {
       "command": "npx",
       "args": [
         "-y",
         "@modelcontextprotocol/server-sequential-thinking"
       ]
     },
-    "openai-mcp": {
+    "context7": {
       "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-openai"
+        "@upstash/context7-mcp"
       ]
-    },
-    "claude-flow": {
-      "command": "npx",
-      "args": [
-        "claude-flow@alpha",
-        "mcp",
-        "start"
-      ],
-      "type": "stdio"
-    },
-    "ruv-swarm": {
-      "command": "npx",
-      "args": [
-        "ruv-swarm@latest",
-        "mcp",
-        "start"
-      ],
-      "type": "stdio"
     }
   }
 }
