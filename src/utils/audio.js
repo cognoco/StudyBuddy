@@ -1,15 +1,15 @@
-import { Audio } from 'expo-av';
+import { Audio } from 'expo-audio';
 import * as Speech from 'expo-speech';
 
 export const playSound = async (soundFile) => {
   try {
-    const { sound } = await Audio.Sound.createAsync(soundFile);
-    await sound.playAsync();
+    const player = await Audio.AudioPlayer.createAsync(soundFile);
+    await player.play();
     
-    // Unload sound after playing
-    sound.setOnPlaybackStatusUpdate((status) => {
+    // Listen for playback finish and release resources
+    player.addListener('playbackStatusUpdate', (status) => {
       if (status.didJustFinish) {
-        sound.unloadAsync();
+        player.release();
       }
     });
   } catch (error) {

@@ -10,7 +10,7 @@ import {
   Alert
 } from 'react-native';
 import Slider from '@react-native-community/slider';
-import { Audio } from 'expo-av';
+import { Audio } from 'expo-audio';
 import { getStorageItem, setStorageItem } from '../utils/storage';
 import { 
   getAgeConfig, 
@@ -137,15 +137,22 @@ export default function ParentSettingsScreen({ navigation, route }) {
 
   const startRecordingMessage = async () => {
     try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
+      const permission = await Audio.usePermissions();
+      if (!permission.granted) {
+        await Audio.requestPermissionsAsync();
+      }
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      const recording = await Audio.RecordingManager.createAsync({
+        android: {
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+        },
+        ios: {
+          extension: '.m4a',
+          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+        },
+      });
       setRecording(recording);
       
       Alert.alert('Recording', 'Say your encouraging message now!');
@@ -158,8 +165,8 @@ export default function ParentSettingsScreen({ navigation, route }) {
     if (!recording) return;
     
     setRecording(null);
-    await recording.stopAndUnloadAsync();
-    const uri = recording.getURI();
+    await recording.stopAsync();
+    const uri = recording.uri;
     
     const messages = [...encouragementMessages, uri];
     setEncouragementMessages(messages);

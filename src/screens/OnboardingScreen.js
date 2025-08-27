@@ -8,7 +8,7 @@ import {
   Dimensions,
   Alert
 } from 'react-native';
-import { Audio } from 'expo-av';
+import { Audio } from 'expo-audio';
 import * as Speech from 'expo-speech';
 import { setStorageItem } from '../utils/storage';
 import { BUDDIES_BY_AGE } from '../assets/animations/buddy-animations';
@@ -51,15 +51,22 @@ export default function OnboardingScreen({ navigation }) {
 
   const startRecording = async () => {
     try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
+      const permission = await Audio.usePermissions();
+      if (!permission.granted) {
+        await Audio.requestPermissionsAsync();
+      }
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      const recording = await Audio.RecordingManager.createAsync({
+        android: {
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+        },
+        ios: {
+          extension: '.m4a',
+          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+        },
+      });
       setRecording(recording);
     } catch (err) {
       Alert.alert('Oops!', 'Could not start recording. You can set this up later!');
@@ -70,8 +77,8 @@ export default function OnboardingScreen({ navigation }) {
     if (!recording) return;
     
     setRecording(null);
-    await recording.stopAndUnloadAsync();
-    const uri = recording.getURI();
+    await recording.stopAsync();
+    const uri = recording.uri;
     
     await setStorageItem('childNameRecording', uri);
     setStep('ready');
