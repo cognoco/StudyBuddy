@@ -60,7 +60,7 @@ export const TEACHER_VOICES = {
     }
   },
   
-  english: {
+  reading: {
     name: "Ms. Literature",
     voice: {
       pitch: 1.0,        // Standard pitch
@@ -76,13 +76,43 @@ export const TEACHER_VOICES = {
     },
     phrases: {
       encouragement: [
+        "What a wonderful story!",
+        "You're a great reader!",
+        "Keep exploring new worlds!",
+        "Your reading skills are growing!"
+      ],
+      celebration: [
+        "Magnificent reading work!",
+        "You've read something wonderful!",
+        "You're becoming a great reader!",
+        "Your imagination is flourishing!"
+      ]
+    }
+  },
+  
+  writing: {
+    name: "Ms. Wordsmith",
+    voice: {
+      pitch: 1.05,       // Slightly higher, creative
+      rate: 0.9,         // Slower, thoughtful
+      language: 'en-US',
+      personality: 'creative'
+    },
+    quirks: {
+      favoritePhrase: "Every word matters!",
+      thinkingSound: "Let's see...",
+      excitementLevel: "thoughtful",
+      teachingStyle: "encouraging"
+    },
+    phrases: {
+      encouragement: [
         "Your writing is beautiful!",
         "You have such a way with words!",
         "Keep expressing yourself!",
         "Your creativity is inspiring!"
       ],
       celebration: [
-        "Magnificent literary work!",
+        "Magnificent writing work!",
         "Your storytelling is wonderful!",
         "You've crafted something special!",
         "Your words have power!"
@@ -146,6 +176,96 @@ export const TEACHER_VOICES = {
         "Your historical knowledge is impressive!",
         "You're preserving our stories!",
         "You've learned from history!"
+      ]
+    }
+  },
+  
+  geography: {
+    name: "Professor Explorer",
+    voice: {
+      pitch: 0.95,       // Slightly deeper, adventurous
+      rate: 1.0,         // Normal rate
+      language: 'en-US',
+      personality: 'adventurous'
+    },
+    quirks: {
+      favoritePhrase: "Let's explore the world!",
+      thinkingSound: "Hmm, interesting...",
+      excitementLevel: "worldly",
+      teachingStyle: "exploratory"
+    },
+    phrases: {
+      encouragement: [
+        "What an amazing place to discover!",
+        "You're becoming a world explorer!",
+        "Keep mapping out our world!",
+        "Your geographic knowledge is growing!"
+      ],
+      celebration: [
+        "You've discovered something wonderful!",
+        "Your world knowledge is impressive!",
+        "You're a true explorer!",
+        "You've mastered the world!"
+      ]
+    }
+  },
+  
+  chemistry: {
+    name: "Dr. Molecule",
+    voice: {
+      pitch: 1.05,       // Slightly higher, precise
+      rate: 0.95,        // Slightly slower, careful
+      language: 'en-US',
+      personality: 'precise'
+    },
+    quirks: {
+      favoritePhrase: "The elements are amazing!",
+      thinkingSound: "Let's see now...",
+      excitementLevel: "measured",
+      teachingStyle: "methodical"
+    },
+    phrases: {
+      encouragement: [
+        "Your chemical thinking is sharp!",
+        "You're mastering the elements!",
+        "Keep balancing those equations!",
+        "Your lab skills are developing!"
+      ],
+      celebration: [
+        "Outstanding chemical work!",
+        "You've mastered the reaction!",
+        "Your formula is perfect!",
+        "You're becoming a great chemist!"
+      ]
+    }
+  },
+  
+  biology: {
+    name: "Dr. Nature",
+    voice: {
+      pitch: 1.0,        // Natural voice
+      rate: 1.0,         // Normal rate
+      language: 'en-US',
+      personality: 'nurturing'
+    },
+    quirks: {
+      favoritePhrase: "Life is incredible!",
+      thinkingSound: "Ah, nature...",
+      excitementLevel: "gentle",
+      teachingStyle: "nurturing"
+    },
+    phrases: {
+      encouragement: [
+        "You're understanding life itself!",
+        "Your biological knowledge is growing!",
+        "Keep exploring living systems!",
+        "You're connecting with nature!"
+      ],
+      celebration: [
+        "Amazing biological discovery!",
+        "You've understood life's processes!",
+        "Your natural instincts are perfect!",
+        "You're a true biologist!"
       ]
     }
   },

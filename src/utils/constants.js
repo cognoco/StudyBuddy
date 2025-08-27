@@ -595,7 +595,7 @@ export const getAgeConfig = (ageGroup) => {
 // Get subjects appropriate for age
 export const getSubjectsForAge = (ageGroup) => {
   const subjectIds = SUBJECT_SYSTEM.ageGroups[ageGroup] || SUBJECT_SYSTEM.ageGroups.elementary;
-  return subjectIds.map(id => SUBJECT_SYSTEM.subjects[id]);
+  return subjectIds.map(id => SUBJECT_SYSTEM.subjects[id]).filter(Boolean);
 };
 
 // Get check-in messages for subject
