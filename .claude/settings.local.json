@@ -1,10 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git reset:*)",
-      "Bash(git push:*)"
+      "mcp__ruv-swarm",
+      "mcp__claude-flow"
     ],
-    "deny": [],
-    "ask": []
+    "deny": []
   }
 }
