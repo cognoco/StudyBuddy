@@ -1,0 +1,48 @@
+{
+  "name": "Zwizzly DX Devcontainer",
+  
+  // Use a pre-built, standardized image from Microsoft.
+  // This one includes Node.js and common development tools.
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  
+  "remoteUser": "node",
+
+  // This syncs the container user's ID with your local user's ID to fix permission issues
+  "updateRemoteUserUID": true,
+
+  // The "features" block tells the container builder to install
+  // additional tools. We already have Python here.
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    }
+  },
+
+  "runArgs": ["--env-file", ".devcontainer/devcontainer.env"],
+  
+  // This tells VS Code/Cursor which extensions to automatically
+  // install inside the container for a better experience.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.live-server",
+        "streetsidesoftware.code-spell-checker",
+        "Anthropic.claude-code",
+        "bierner.markdown-mermaid",
+        "bierner.markdown-yaml-preamble",
+        "DavidAnson.vscode-markdownlint",
+        "RooVeterinaryInc.roo-cline",
+        "dbaeumer.vscode-eslint",
+        "ms-azuretools.vscode-docker",
+        "ms-azuretools.vscode-containers",
+        "github.vscode-github-actions"
+      ]
+    }
+  },
+  
+  // Forward the port for the live server so we can see the game.
+  "forwardPorts": [5500],
+
+  // Install the Claude CLI automatically after the container is created.
+  "postCreateCommand": "sudo sh -c \"sed -i 's/\\r$//' .devcontainer/setup.sh && sh .devcontainer/setup.sh\""
+}
