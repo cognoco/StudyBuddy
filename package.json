@@ -60,7 +60,7 @@
     "metro": "^0.82.5",
     "metro-config": "^0.82.5",
     "metro-core": "^0.82.5",
-    "react-test-renderer": "18.2.0"
+    "react-test-renderer": "19.1.1"
   },
   "private": true,
   "jest": {
