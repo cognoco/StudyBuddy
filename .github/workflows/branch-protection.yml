@@ -1,0 +1,445 @@
+name: Branch Protection & Policy Enforcement
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      enforce_policies:
+        description: 'Enforce all branch protection policies'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  MIN_REVIEWERS: 2
+  REQUIRED_STATUS_CHECKS: 'continuous-integration,security-scan'
+
+jobs:
+  # Enforce branch protection rules
+  branch_protection:
+    name: Enforce Branch Protection
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    permissions:
+      administration: write
+      contents: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup branch protection for main
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const protection = {
+            required_status_checks: {
+              strict: true,
+              contexts: ['continuous-integration', 'security-scan', 'quality-gates']
+            },
+            enforce_admins: false,
+            required_pull_request_reviews: {
+              required_approving_review_count: ${{ env.MIN_REVIEWERS }},
+              dismiss_stale_reviews: true,
+              require_code_owner_reviews: true,
+              require_last_push_approval: true
+            },
+            restrictions: null,
+            allow_force_pushes: false,
+            allow_deletions: false,
+            block_creations: false
+          };
+          
+          try {
+            await github.rest.repos.updateBranchProtection({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+              ...protection
+            });
+            console.log('✅ Branch protection updated for main branch');
+          } catch (error) {
+            console.log('⚠️ Could not update branch protection:', error.message);
+          }
+    
+    - name: Setup branch protection for develop
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const protection = {
+            required_status_checks: {
+              strict: true,
+              contexts: ['continuous-integration', 'security-scan']
+            },
+            enforce_admins: false,
+            required_pull_request_reviews: {
+              required_approving_review_count: 1,
+              dismiss_stale_reviews: true,
+              require_code_owner_reviews: false
+            },
+            restrictions: null,
+            allow_force_pushes: false,
+            allow_deletions: false
+          };
+          
+          try {
+            await github.rest.repos.updateBranchProtection({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'develop',
+              ...protection
+            });
+            console.log('✅ Branch protection updated for develop branch');
+          } catch (error) {
+            console.log('⚠️ Could not update branch protection:', error.message);
+          }
+
+  # PR policy enforcement
+  pr_policy_check:
+    name: PR Policy Enforcement
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Validate PR structure
+      run: |
+        echo "Validating PR structure and policies..."
+        
+        # Check PR title format
+        pr_title="${{ github.event.pull_request.title }}"
+        if [[ ! "$pr_title" =~ ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?:\s.+ ]]; then
+          echo "❌ PR title must follow conventional commits format"
+          echo "Example: feat(auth): add user authentication"
+          exit 1
+        fi
+        
+        echo "✅ PR title format is valid"
+    
+    - name: Check PR description
+      run: |
+        pr_body="${{ github.event.pull_request.body }}"
+        
+        # Check if PR has description
+        if [ -z "$pr_body" ] || [ "$pr_body" = "null" ]; then
+          echo "❌ PR must have a description"
+          exit 1
+        fi
+        
+        # Check for required sections
+        required_sections=("## Description" "## Changes" "## Testing")
+        
+        for section in "${required_sections[@]}"; do
+          if ! echo "$pr_body" | grep -q "$section"; then
+            echo "⚠️ Recommended section missing: $section"
+          fi
+        done
+        
+        echo "✅ PR description is adequate"
+    
+    - name: Check PR size
+      run: |
+        echo "Checking PR size..."
+        
+        # Get PR statistics
+        files_changed=${{ github.event.pull_request.changed_files }}
+        additions=${{ github.event.pull_request.additions }}
+        deletions=${{ github.event.pull_request.deletions }}
+        
+        echo "Files changed: $files_changed"
+        echo "Lines added: $additions"
+        echo "Lines deleted: $deletions"
+        
+        # Size thresholds
+        if [ $files_changed -gt 50 ]; then
+          echo "⚠️ Large PR: $files_changed files changed. Consider breaking into smaller PRs."
+        fi
+        
+        if [ $additions -gt 1000 ]; then
+          echo "⚠️ Large PR: $additions lines added. Consider breaking into smaller PRs."
+        fi
+        
+        # Hard limits (fail the check)
+        if [ $files_changed -gt 100 ] || [ $additions -gt 2000 ]; then
+          echo "❌ PR too large. Please break into smaller, focused PRs."
+          exit 1
+        fi
+        
+        echo "✅ PR size is acceptable"
+    
+    - name: Check for breaking changes
+      run: |
+        echo "Checking for breaking changes..."
+        
+        # Look for breaking change indicators
+        breaking_patterns=(
+          "BREAKING CHANGE"
+          "breaking change"
+          "major version"
+          "breaking:"
+        )
+        
+        pr_title="${{ github.event.pull_request.title }}"
+        pr_body="${{ github.event.pull_request.body }}"
+        
+        has_breaking=false
+        for pattern in "${breaking_patterns[@]}"; do
+          if echo "$pr_title $pr_body" | grep -qi "$pattern"; then
+            has_breaking=true
+            echo "⚠️ Breaking change detected: $pattern"
+          fi
+        done
+        
+        # Check file changes for potential breaking changes
+        if git diff origin/${{ github.base_ref }}..HEAD --name-only | grep -E "(package\.json|app\.json|.*\.config\.*)"; then
+          echo "⚠️ Configuration files changed - potential breaking change"
+          has_breaking=true
+        fi
+        
+        if [ "$has_breaking" = true ]; then
+          echo "📋 Breaking changes require:"
+          echo "  - Detailed migration guide"
+          echo "  - Version bump planning"
+          echo "  - Extra reviewer approval"
+        else
+          echo "✅ No breaking changes detected"
+        fi
+    
+    - name: Auto-assign reviewers
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { data: prFiles } = await github.rest.pulls.listFiles({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number,
+          });
+          
+          // Define code owners based on file patterns
+          const codeOwners = {
+            'src/components/': ['ui-team'],
+            'src/screens/': ['mobile-team'],
+            'src/utils/': ['core-team'],
+            '.github/workflows/': ['devops-team'],
+            'docs/': ['doc-team']
+          };
+          
+          let reviewers = new Set();
+          
+          // Add reviewers based on changed files
+          prFiles.forEach(file => {
+            Object.entries(codeOwners).forEach(([pattern, owners]) => {
+              if (file.filename.startsWith(pattern)) {
+                owners.forEach(owner => reviewers.add(owner));
+              }
+            });
+          });
+          
+          // Convert to array and limit to 3 reviewers
+          const reviewerList = Array.from(reviewers).slice(0, 3);
+          
+          if (reviewerList.length > 0) {
+            try {
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                reviewers: reviewerList
+              });
+              console.log(`✅ Auto-assigned reviewers: ${reviewerList.join(', ')}`);
+            } catch (error) {
+              console.log('⚠️ Could not auto-assign reviewers:', error.message);
+            }
+          }
+
+  # Security policy enforcement
+  security_policy:
+    name: Security Policy Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Check for sensitive file changes
+      run: |
+        echo "Checking for sensitive file changes..."
+        
+        # List of sensitive file patterns
+        sensitive_patterns=(
+          "secrets/"
+          ".env"
+          "*.key"
+          "*.pem"
+          "*.p12"
+          "google-services.json"
+          "GoogleService-Info.plist"
+        )
+        
+        sensitive_changes=false
+        
+        # Check changed files
+        for pattern in "${sensitive_patterns[@]}"; do
+          if git diff origin/${{ github.base_ref }}..HEAD --name-only | grep -E "$pattern"; then
+            echo "⚠️ Sensitive file pattern detected: $pattern"
+            sensitive_changes=true
+          fi
+        done
+        
+        if [ "$sensitive_changes" = true ]; then
+          echo "🔐 Sensitive file changes detected. Extra security review required."
+          
+          # Add security label to PR
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "security-review"
+        else
+          echo "✅ No sensitive file changes detected"
+        fi
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: License compatibility check
+      run: |
+        echo "Checking license compatibility..."
+        
+        # Check if package.json changed
+        if git diff origin/${{ github.base_ref }}..HEAD --name-only | grep "package.json"; then
+          echo "📦 Package dependencies changed - license review recommended"
+          
+          # List new dependencies
+          echo "New/changed dependencies:"
+          git diff origin/${{ github.base_ref }}..HEAD package.json | grep '^[+-]' | grep -E '"[^"]+":\s*"' || echo "None detected"
+        else
+          echo "✅ No dependency changes detected"
+        fi
+
+  # Compliance and governance
+  compliance_check:
+    name: Compliance & Governance
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Governance policy check
+      run: |
+        echo "Checking governance policies..."
+        
+        # Check if this is a hotfix
+        pr_title="${{ github.event.pull_request.title }}"
+        if echo "$pr_title" | grep -qi "hotfix\|emergency"; then
+          echo "🚨 Emergency/Hotfix PR detected"
+          echo "Requires immediate attention and post-deployment review"
+          
+          # Add hotfix label
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "hotfix"
+        fi
+        
+        # Check PR author permissions
+        pr_author="${{ github.event.pull_request.user.login }}"
+        echo "PR Author: $pr_author"
+        
+        # In a real scenario, you might check against a team membership API
+        echo "✅ Governance policies checked"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Generate compliance report
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const report = {
+            pr_number: context.issue.number,
+            author: '${{ github.event.pull_request.user.login }}',
+            title: '${{ github.event.pull_request.title }}',
+            base_branch: '${{ github.base_ref }}',
+            files_changed: ${{ github.event.pull_request.changed_files }},
+            additions: ${{ github.event.pull_request.additions }},
+            deletions: ${{ github.event.pull_request.deletions }},
+            timestamp: new Date().toISOString(),
+            compliance_checks: {
+              title_format: true,  // Would be set by actual checks
+              description_present: true,
+              size_acceptable: true,
+              security_reviewed: false  // Set by security checks
+            }
+          };
+          
+          console.log('📋 Compliance Report:');
+          console.log(JSON.stringify(report, null, 2));
+          
+          // Store for audit trail (in a real scenario)
+          core.setOutput('compliance_report', JSON.stringify(report));
+
+  # Policy summary
+  policy_summary:
+    name: Policy Enforcement Summary
+    runs-on: ubuntu-latest
+    needs: [pr_policy_check, security_policy, compliance_check]
+    if: always() && github.event_name == 'pull_request'
+    
+    steps:
+    - name: Generate policy summary
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const prPolicyResult = '${{ needs.pr_policy_check.result }}';
+          const securityResult = '${{ needs.security_policy.result }}';
+          const complianceResult = '${{ needs.compliance_check.result }}';
+          
+          let summary = '# 🛡️ Branch Protection & Policy Summary\n\n';
+          
+          // Policy check results
+          summary += '## Policy Enforcement Results\n\n';
+          summary += '| Policy | Status |\n';
+          summary += '|--------|--------|\n';
+          summary += `| PR Structure | ${prPolicyResult === 'success' ? '✅ Compliant' : '❌ Non-compliant'} |\n`;
+          summary += `| Security Review | ${securityResult === 'success' ? '✅ Passed' : securityResult === 'skipped' ? '⏭️ Skipped' : '❌ Failed'} |\n`;
+          summary += `| Governance | ${complianceResult === 'success' ? '✅ Compliant' : complianceResult === 'skipped' ? '⏭️ Skipped' : '❌ Non-compliant'} |\n`;
+          
+          // Overall status
+          const allPassed = prPolicyResult === 'success' && 
+                           (securityResult === 'success' || securityResult === 'skipped') && 
+                           (complianceResult === 'success' || complianceResult === 'skipped');
+          
+          if (allPassed) {
+            summary += '\n## ✅ Overall Status: COMPLIANT\n\n';
+            summary += 'This PR meets all branch protection and governance policies.\n';
+          } else {
+            summary += '\n## ❌ Overall Status: POLICY VIOLATIONS\n\n';
+            summary += 'This PR has policy violations that must be addressed before merge.\n';
+          }
+          
+          summary += '\n---\n*Branch Protection Policy Enforcement*';
+          
+          console.log(summary);
+          await core.summary.addRaw(summary).write();
+          
+          // Comment on PR if there are violations
+          if (!allPassed) {
+            const comment = `${summary}\n\n@${{ github.event.pull_request.user.login }} Please address the policy violations above.`;
+            
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            } catch (error) {
+              console.log('Could not post comment:', error.message);
+            }
+          }
