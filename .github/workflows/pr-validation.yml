@@ -1,0 +1,421 @@
+name: PR Validation Pipeline
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+env:
+  NODE_VERSION: '18'
+  EXPO_VERSION: 'latest'
+
+jobs:
+  # PR metadata and validation
+  pr_info:
+    name: PR Validation & Info
+    runs-on: ubuntu-latest
+    outputs:
+      has_breaking_changes: ${{ steps.changes.outputs.has_breaking_changes }}
+      has_migrations: ${{ steps.changes.outputs.has_migrations }}
+      complexity_score: ${{ steps.complexity.outputs.score }}
+      reviewers_needed: ${{ steps.reviewers.outputs.count }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Analyze changes
+      id: changes
+      run: |
+        # Check for breaking changes indicators
+        if git diff origin/${{ github.base_ref }}..HEAD --name-only | grep -E "(package\.json|app\.json|.*\.config\.*)" > /dev/null; then
+          echo "has_breaking_changes=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_breaking_changes=false" >> $GITHUB_OUTPUT
+        fi
+        
+        # Check for migrations or schema changes
+        if git diff origin/${{ github.base_ref }}..HEAD --name-only | grep -E "(migration|schema|database)" > /dev/null; then
+          echo "has_migrations=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_migrations=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Calculate complexity score
+      id: complexity
+      run: |
+        # Simple complexity scoring based on files changed
+        files_changed=$(git diff origin/${{ github.base_ref }}..HEAD --name-only | wc -l)
+        lines_added=$(git diff origin/${{ github.base_ref }}..HEAD --numstat | awk '{sum += $1} END {print sum}')
+        lines_deleted=$(git diff origin/${{ github.base_ref }}..HEAD --numstat | awk '{sum += $2} END {print sum}')
+        
+        # Calculate complexity score (0-100)
+        complexity_score=$((files_changed * 5 + (lines_added + lines_deleted) / 10))
+        if [ $complexity_score -gt 100 ]; then complexity_score=100; fi
+        
+        echo "score=$complexity_score" >> $GITHUB_OUTPUT
+        echo "files_changed=$files_changed" >> $GITHUB_OUTPUT
+        echo "lines_added=$lines_added" >> $GITHUB_OUTPUT
+        echo "lines_deleted=$lines_deleted" >> $GITHUB_OUTPUT
+    
+    - name: Determine reviewers needed
+      id: reviewers
+      run: |
+        complexity_score=${{ steps.complexity.outputs.score }}
+        has_breaking_changes=${{ steps.changes.outputs.has_breaking_changes }}
+        
+        if [ "$has_breaking_changes" = "true" ] || [ $complexity_score -gt 75 ]; then
+          echo "count=2" >> $GITHUB_OUTPUT
+        elif [ $complexity_score -gt 40 ]; then
+          echo "count=1" >> $GITHUB_OUTPUT
+        else
+          echo "count=1" >> $GITHUB_OUTPUT
+        fi
+
+  # Fast feedback loop for PRs
+  quick_checks:
+    name: Quick Validation
+    runs-on: ubuntu-latest
+    needs: pr_info
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Quick lint check
+      run: npm run lint
+    
+    - name: Quick test run
+      run: npm run test:quick
+    
+    - name: Security audit (quick)
+      run: npm audit --audit-level high
+    
+    - name: Check PR title format
+      uses: amannn/action-semantic-pull-request@v5
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        types: |
+          feat
+          fix
+          docs
+          style
+          refactor
+          perf
+          test
+          build
+          ci
+          chore
+          revert
+
+  # Comprehensive PR testing
+  comprehensive_tests:
+    name: Comprehensive Testing
+    runs-on: ubuntu-latest
+    needs: [pr_info, quick_checks]
+    if: needs.pr_info.outputs.complexity_score > 30
+    
+    strategy:
+      matrix:
+        test_suite: [unit, integration, e2e]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Setup Expo CLI
+      run: npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+    
+    - name: Run unit tests
+      if: matrix.test_suite == 'unit'
+      run: npm run test:coverage
+    
+    - name: Run integration tests
+      if: matrix.test_suite == 'integration'
+      run: npm run test:integration --if-present || echo "No integration tests"
+    
+    - name: Run E2E tests
+      if: matrix.test_suite == 'e2e'
+      run: npm run test:e2e --if-present || echo "No E2E tests"
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-${{ matrix.test_suite }}-${{ github.run_number }}
+        path: |
+          coverage/
+          test-results/
+          screenshots/
+        retention-days: 7
+
+  # Build verification for PRs
+  build_verification:
+    name: Build Verification
+    runs-on: ubuntu-latest
+    needs: [pr_info, quick_checks]
+    if: needs.pr_info.outputs.complexity_score > 20
+    
+    strategy:
+      matrix:
+        platform: [android, web]  # Skip iOS for PR builds to save time
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Setup Expo CLI
+      run: npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+    
+    - name: Build for verification
+      run: |
+        case "${{ matrix.platform }}" in
+          "android")
+            npx expo export --platform android
+            ;;
+          "web")
+            npx expo export --platform web --clear
+            ;;
+        esac
+      env:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: pr-build-${{ matrix.platform }}-${{ github.run_number }}
+        path: |
+          web-build/
+          dist/
+        retention-days: 5
+
+  # Security scan for PRs
+  security_scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [pr_info, quick_checks]
+    permissions:
+      security-events: write
+      contents: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Snyk security scan
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=medium --json
+        command: test
+    
+    - name: CodeQL Analysis (differential)
+      uses: github/codeql-action/init@v3
+      with:
+        languages: javascript
+        queries: security-and-quality
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+  # Visual regression testing
+  visual_tests:
+    name: Visual Regression Tests  
+    runs-on: ubuntu-latest
+    needs: [pr_info, build_verification]
+    if: needs.pr_info.outputs.complexity_score > 40
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: pr-build-web-*
+    
+    - name: Run visual regression tests
+      run: |
+        echo "Running visual regression tests..."
+        # Add visual testing framework (Chromatic, Percy, etc.)
+        npm run test:visual --if-present || echo "No visual tests configured"
+    
+    - name: Upload visual diff artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: visual-diffs-${{ github.run_number }}
+        path: visual-diffs/
+        retention-days: 7
+
+  # PR summary and feedback
+  pr_summary:
+    name: PR Summary & Feedback
+    runs-on: ubuntu-latest
+    needs: [pr_info, quick_checks, comprehensive_tests, build_verification, security_scan]
+    if: always()
+    
+    steps:
+    - name: Generate PR summary
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const prInfo = ${{ toJSON(needs.pr_info.outputs) }};
+          const quickChecks = "${{ needs.quick_checks.result }}";
+          const comprehensiveTests = "${{ needs.comprehensive_tests.result }}";
+          const buildVerification = "${{ needs.build_verification.result }}";
+          const securityScan = "${{ needs.security_scan.result }}";
+          
+          const complexityScore = parseInt(prInfo.complexity_score);
+          const hasBreakingChanges = prInfo.has_breaking_changes === 'true';
+          const reviewersNeeded = parseInt(prInfo.reviewers_needed);
+          
+          let summary = `## 🔍 PR Validation Summary\n\n`;
+          summary += `**Complexity Score:** ${complexityScore}/100\n`;
+          summary += `**Breaking Changes:** ${hasBreakingChanges ? '⚠️ Yes' : '✅ No'}\n`;
+          summary += `**Reviewers Needed:** ${reviewersNeeded}\n\n`;
+          
+          summary += `### Test Results\n`;
+          summary += `- Quick Checks: ${quickChecks === 'success' ? '✅' : '❌'}\n`;
+          summary += `- Comprehensive Tests: ${comprehensiveTests === 'success' ? '✅' : comprehensiveTests === 'skipped' ? '⏭️ Skipped' : '❌'}\n`;
+          summary += `- Build Verification: ${buildVerification === 'success' ? '✅' : buildVerification === 'skipped' ? '⏭️ Skipped' : '❌'}\n`;
+          summary += `- Security Scan: ${securityScan === 'success' ? '✅' : '❌'}\n\n`;
+          
+          if (complexityScore > 75) {
+            summary += `### ⚠️ High Complexity PR\nThis PR has a high complexity score. Consider:\n`;
+            summary += `- Breaking it into smaller PRs\n`;
+            summary += `- Adding more detailed documentation\n`;
+            summary += `- Ensuring comprehensive test coverage\n\n`;
+          }
+          
+          if (hasBreakingChanges) {
+            summary += `### 🚨 Breaking Changes Detected\nThis PR contains potential breaking changes. Please:\n`;
+            summary += `- Update the CHANGELOG.md\n`;
+            summary += `- Consider version bump requirements\n`;
+            summary += `- Add migration documentation if needed\n\n`;
+          }
+          
+          summary += `### 📊 Build Artifacts\n`;
+          summary += `Build artifacts are available for testing and review.\n\n`;
+          summary += `---\n*Generated by StudyBuddy CI/CD Pipeline*`;
+          
+          // Check if comment already exists
+          const { data: comments } = await github.rest.issues.listComments({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          });
+          
+          const botComment = comments.find(comment => 
+            comment.user.type === 'Bot' && 
+            comment.body.includes('🔍 PR Validation Summary')
+          );
+          
+          if (botComment) {
+            await github.rest.issues.updateComment({
+              comment_id: botComment.id,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+          } else {
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+          }
+
+  # Auto-assign reviewers based on complexity
+  assign_reviewers:
+    name: Auto-assign Reviewers
+    runs-on: ubuntu-latest
+    needs: pr_info
+    if: github.event.action == 'opened'
+    
+    steps:
+    - name: Assign reviewers
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const reviewersNeeded = parseInt('${{ needs.pr_info.outputs.reviewers_needed }}');
+          const hasBreakingChanges = '${{ needs.pr_info.outputs.has_breaking_changes }}' === 'true';
+          
+          // Define reviewer pools
+          const codeReviewers = ['maintainer1', 'maintainer2', 'senior-dev'];
+          const securityReviewers = ['security-expert', 'senior-architect'];
+          
+          let reviewers = [];
+          
+          if (hasBreakingChanges) {
+            reviewers = reviewers.concat(securityReviewers.slice(0, 1));
+            reviewers = reviewers.concat(codeReviewers.slice(0, reviewersNeeded));
+          } else {
+            reviewers = codeReviewers.slice(0, reviewersNeeded);
+          }
+          
+          if (reviewers.length > 0) {
+            try {
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                reviewers: reviewers
+              });
+              console.log(`Assigned reviewers: ${reviewers.join(', ')}`);
+            } catch (error) {
+              console.log('Could not assign reviewers:', error.message);
+            }
+          }

@@ -1,0 +1,321 @@
+{
+  "security": {
+    "name": "StudyBuddy Security Configuration",
+    "version": "1.0.0",
+    "description": "Comprehensive security configuration for CI/CD pipeline",
+    
+    "scanning": {
+      "enabled": true,
+      "schedule": {
+        "daily": "0 2 * * *",
+        "on_pr": true,
+        "on_push": true,
+        "on_release": true
+      },
+      
+      "tools": {
+        "dependency_scanning": {
+          "npm_audit": {
+            "enabled": true,
+            "audit_level": "moderate",
+            "production_only": false,
+            "skip_dev": false
+          },
+          "snyk": {
+            "enabled": true,
+            "monitor": true,
+            "fail_threshold": "high",
+            "test_dev_deps": false
+          },
+          "owasp_dependency_check": {
+            "enabled": true,
+            "retire_js": true,
+            "node_audit": true,
+            "experimental": true
+          }
+        },
+        
+        "secret_detection": {
+          "trufflehog": {
+            "enabled": true,
+            "only_verified": true,
+            "scan_depth": 100
+          },
+          "gitleaks": {
+            "enabled": true,
+            "config": ".gitleaks.toml"
+          },
+          "detect_secrets": {
+            "enabled": true,
+            "baseline": ".secrets.baseline",
+            "plugins": [
+              "ArtifactoryDetector",
+              "AWSKeyDetector",
+              "AzureStorageKeyDetector",
+              "Base64HighEntropyString",
+              "BasicAuthDetector",
+              "GitHubTokenDetector",
+              "JwtTokenDetector",
+              "KeywordDetector",
+              "PrivateKeyDetector"
+            ]
+          }
+        },
+        
+        "code_analysis": {
+          "codeql": {
+            "enabled": true,
+            "languages": ["javascript"],
+            "queries": "security-extended,security-and-quality",
+            "config": ".github/codeql/codeql-config.yml"
+          },
+          "eslint_security": {
+            "enabled": true,
+            "plugins": ["security", "security-node"],
+            "fail_on_error": true
+          }
+        },
+        
+        "license_scanning": {
+          "license_checker": {
+            "enabled": true,
+            "config": ".license-checker-rc.json",
+            "fail_on_unknown": false,
+            "summary": true
+          },
+          "fossa": {
+            "enabled": false,
+            "api_key_env": "FOSSA_API_KEY",
+            "timeout": 300
+          }
+        },
+        
+        "container_scanning": {
+          "trivy": {
+            "enabled": true,
+            "severity": "HIGH,CRITICAL",
+            "ignore_unfixed": false,
+            "formats": ["sarif", "json"]
+          },
+          "hadolint": {
+            "enabled": true,
+            "config": ".hadolint.yaml"
+          }
+        }
+      }
+    },
+    
+    "policies": {
+      "vulnerability_thresholds": {
+        "critical": {
+          "max_allowed": 0,
+          "action": "block",
+          "notification": true
+        },
+        "high": {
+          "max_allowed": 5,
+          "action": "warn",
+          "notification": true
+        },
+        "medium": {
+          "max_allowed": 20,
+          "action": "info",
+          "notification": false
+        },
+        "low": {
+          "max_allowed": 100,
+          "action": "track",
+          "notification": false
+        }
+      },
+      
+      "secret_policies": {
+        "block_on_any": true,
+        "allowed_patterns": [
+          "test_*",
+          "example_*",
+          "dummy_*",
+          "fake_*",
+          "mock_*"
+        ],
+        "notification": true
+      },
+      
+      "license_policies": {
+        "approved_licenses": [
+          "MIT",
+          "ISC",
+          "Apache-2.0",
+          "BSD-2-Clause",
+          "BSD-3-Clause",
+          "CC0-1.0",
+          "Unlicense",
+          "WTFPL",
+          "0BSD"
+        ],
+        "forbidden_licenses": [
+          "GPL",
+          "GPL-2.0",
+          "GPL-3.0",
+          "AGPL",
+          "AGPL-3.0",
+          "LGPL",
+          "LGPL-2.1",
+          "LGPL-3.0",
+          "CPOL",
+          "EPL",
+          "MPL",
+          "CC-BY-SA",
+          "SSPL",
+          "BUSL"
+        ],
+        "review_required": [
+          "CC-BY",
+          "Apache-1.1",
+          "BSD-4-Clause"
+        ],
+        "action_on_violation": "warn"
+      },
+      
+      "code_quality_gates": {
+        "security_rating": "A",
+        "maintainability_rating": "A",
+        "reliability_rating": "A",
+        "coverage_threshold": 80,
+        "duplicated_lines_density": 3,
+        "code_smells": 50
+      }
+    },
+    
+    "notifications": {
+      "slack": {
+        "enabled": true,
+        "webhook_env": "SLACK_SECURITY_WEBHOOK",
+        "channel": "#security-alerts",
+        "on_critical": true,
+        "on_high": true,
+        "on_secrets": true,
+        "on_policy_violation": true
+      },
+      
+      "email": {
+        "enabled": true,
+        "recipients": [
+          "security@studybuddy.com",
+          "devops@studybuddy.com"
+        ],
+        "on_critical": true,
+        "on_secrets": true
+      },
+      
+      "github_issues": {
+        "enabled": true,
+        "create_on_critical": true,
+        "create_on_secrets": true,
+        "labels": ["security", "vulnerability"],
+        "assignees": ["security-team"],
+        "template": ".github/ISSUE_TEMPLATE/security-issue.md"
+      }
+    },
+    
+    "reporting": {
+      "formats": ["json", "html", "sarif", "markdown"],
+      "retention_days": 90,
+      "artifact_upload": true,
+      "dashboard_integration": true,
+      
+      "consolidation": {
+        "enabled": true,
+        "merge_duplicate_findings": true,
+        "aggregate_by_severity": true,
+        "include_recommendations": true,
+        "security_score": true
+      }
+    },
+    
+    "exemptions": {
+      "file_patterns": [
+        "node_modules/**/*",
+        "dist/**/*",
+        "build/**/*",
+        "coverage/**/*",
+        "test-reports/**/*",
+        ".git/**/*",
+        "docs/**/*",
+        "*.md",
+        "*.txt",
+        "LICENSE*",
+        "CHANGELOG*"
+      ],
+      
+      "vulnerability_exemptions": [
+        {
+          "cve": "CVE-EXAMPLE-2023-0001",
+          "reason": "False positive - not applicable to our use case",
+          "expiry": "2024-12-31",
+          "approved_by": "security-team"
+        }
+      ],
+      
+      "package_exemptions": [
+        {
+          "name": "react-native",
+          "reason": "Core framework dependency",
+          "max_severity": "high",
+          "monitor_updates": true
+        }
+      ]
+    },
+    
+    "integration": {
+      "github_actions": {
+        "workflow_file": ".github/workflows/security-scanning.yml",
+        "required_secrets": [
+          "SNYK_TOKEN",
+          "NVD_API_KEY",
+          "FOSSA_API_KEY",
+          "SLACK_SECURITY_WEBHOOK"
+        ],
+        "artifact_retention": 30
+      },
+      
+      "sonarqube": {
+        "enabled": false,
+        "server_url": "https://sonarcloud.io",
+        "project_key": "studybuddy",
+        "quality_gate": "security-gate"
+      },
+      
+      "dependency_track": {
+        "enabled": false,
+        "api_url": "https://dependency-track.example.com",
+        "project_name": "StudyBuddy",
+        "auto_create_bom": true
+      }
+    },
+    
+    "monitoring": {
+      "continuous_monitoring": true,
+      "vulnerability_feeds": [
+        "NVD",
+        "GitHub Security Advisories",
+        "NPM Security Advisories",
+        "Snyk Vulnerability Database"
+      ],
+      
+      "alerting": {
+        "new_vulnerabilities": true,
+        "policy_violations": true,
+        "scan_failures": true,
+        "threshold_breaches": true
+      },
+      
+      "metrics": {
+        "track_mttr": true,
+        "vulnerability_trends": true,
+        "security_debt": true,
+        "compliance_score": true
+      }
+    }
+  }
+}

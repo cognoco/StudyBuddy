@@ -1,0 +1,344 @@
+name: Security Audit
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  push:
+    branches: [main, develop]
+    paths:
+      - 'package*.json'
+      - 'yarn.lock'
+      - '.github/workflows/security-audit.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'package*.json'
+      - 'yarn.lock'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  dependency_audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run npm audit
+      run: |
+        echo "Running npm audit..."
+        npm audit --audit-level moderate --json > npm-audit.json || true
+        npm audit --audit-level moderate > npm-audit.txt || true
+        
+        # Check for critical/high vulnerabilities
+        critical_count=$(jq -r '.metadata.vulnerabilities.critical // 0' npm-audit.json)
+        high_count=$(jq -r '.metadata.vulnerabilities.high // 0' npm-audit.json)
+        
+        echo "Critical vulnerabilities: $critical_count"
+        echo "High vulnerabilities: $high_count"
+        
+        if [ "$critical_count" -gt 0 ]; then
+          echo "❌ Critical vulnerabilities found!"
+          exit 1
+        elif [ "$high_count" -gt 10 ]; then
+          echo "⚠️ Too many high-severity vulnerabilities ($high_count)"
+          exit 1
+        else
+          echo "✅ Security audit passed"
+        fi
+    
+    - name: Upload npm audit results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: npm-audit-${{ github.run_number }}
+        path: |
+          npm-audit.json
+          npm-audit.txt
+        retention-days: 30
+
+  snyk_scan:
+    name: Snyk Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run Snyk test
+      uses: snyk/actions/node@master
+      continue-on-error: true
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=medium --json-file-output=snyk-results.json
+        command: test
+    
+    - name: Run Snyk monitor (track dependencies)
+      uses: snyk/actions/node@master
+      continue-on-error: true
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        command: monitor
+    
+    - name: Upload Snyk results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: snyk-results-${{ github.run_number }}
+        path: snyk-results.json
+        retention-days: 30
+
+  codeql_analysis:
+    name: CodeQL Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    
+    strategy:
+      matrix:
+        language: ['javascript']
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ matrix.language }}
+        queries: security-and-quality,security-extended
+        config-file: ./.github/codeql/codeql-config.yml
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Build application
+      run: |
+        npx expo export --platform web --clear
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{matrix.language}}"
+
+  secrets_scan:
+    name: Secret Detection Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for secret scanning
+    
+    - name: Run TruffleHog
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+    
+    - name: Run GitLeaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  owasp_dependency_check:
+    name: OWASP Dependency Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'StudyBuddy'
+        path: '.'
+        format: 'ALL'
+        args: >
+          --enableRetired
+          --enableExperimental
+          --failOnCVSS 7
+          --exclude node_modules/**
+          --exclude web-build/**
+          --exclude dist/**
+    
+    - name: Upload OWASP results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: owasp-dependency-check-${{ github.run_number }}
+        path: reports/
+        retention-days: 30
+
+  license_audit:
+    name: License Compliance Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Install license checker
+      run: npm install -g license-checker
+    
+    - name: Check licenses
+      run: |
+        echo "Checking package licenses..."
+        license-checker --json > licenses.json
+        license-checker --csv > licenses.csv
+        license-checker --summary > licenses-summary.txt
+        
+        # Check for prohibited licenses
+        prohibited_licenses="GPL-2.0,GPL-3.0,AGPL-1.0,AGPL-3.0"
+        
+        if license-checker --exclude "MIT,ISC,BSD,Apache" --failOn "$prohibited_licenses" > /dev/null 2>&1; then
+          echo "✅ License check passed"
+        else
+          echo "❌ Prohibited licenses found!"
+          license-checker --exclude "MIT,ISC,BSD,Apache" --failOn "$prohibited_licenses"
+          exit 1
+        fi
+    
+    - name: Upload license audit results
+      uses: actions/upload-artifact@v4
+      with:
+        name: license-audit-${{ github.run_number }}
+        path: |
+          licenses.json
+          licenses.csv
+          licenses-summary.txt
+        retention-days: 30
+
+  security_summary:
+    name: Security Audit Summary
+    runs-on: ubuntu-latest
+    needs: [dependency_audit, snyk_scan, codeql_analysis, secrets_scan, owasp_dependency_check, license_audit]
+    if: always()
+    
+    steps:
+    - name: Download all audit results
+      uses: actions/download-artifact@v4
+      with:
+        pattern: "*-${{ github.run_number }}"
+        merge-multiple: true
+    
+    - name: Generate security report
+      run: |
+        echo "# 🔒 Security Audit Report" > security-report.md
+        echo "" >> security-report.md
+        echo "**Build:** ${{ github.run_number }}" >> security-report.md
+        echo "**Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> security-report.md
+        echo "**Commit:** ${{ github.sha }}" >> security-report.md
+        echo "" >> security-report.md
+        
+        echo "## 📊 Audit Results" >> security-report.md
+        echo "" >> security-report.md
+        
+        # Check job results
+        dep_audit="${{ needs.dependency_audit.result }}"
+        snyk_scan="${{ needs.snyk_scan.result }}"
+        codeql="${{ needs.codeql_analysis.result }}"
+        secrets="${{ needs.secrets_scan.result }}"
+        owasp="${{ needs.owasp_dependency_check.result }}"
+        license="${{ needs.license_audit.result }}"
+        
+        echo "- Dependency Audit: $([[ $dep_audit == 'success' ]] && echo '✅ PASS' || echo '❌ FAIL')" >> security-report.md
+        echo "- Snyk Security Scan: $([[ $snyk_scan == 'success' ]] && echo '✅ PASS' || echo '❌ FAIL')" >> security-report.md
+        echo "- CodeQL Analysis: $([[ $codeql == 'success' ]] && echo '✅ PASS' || echo '❌ FAIL')" >> security-report.md
+        echo "- Secret Detection: $([[ $secrets == 'success' ]] && echo '✅ PASS' || echo '❌ FAIL')" >> security-report.md
+        echo "- OWASP Dependency Check: $([[ $owasp == 'success' ]] && echo '✅ PASS' || echo '❌ FAIL')" >> security-report.md
+        echo "- License Compliance: $([[ $license == 'success' ]] && echo '✅ PASS' || echo '❌ FAIL')" >> security-report.md
+        echo "" >> security-report.md
+        
+        # Add recommendations
+        echo "## 📋 Recommendations" >> security-report.md
+        echo "" >> security-report.md
+        echo "- Keep dependencies up to date" >> security-report.md
+        echo "- Review and address high-priority vulnerabilities" >> security-report.md
+        echo "- Monitor license compliance regularly" >> security-report.md
+        echo "- Implement security headers and best practices" >> security-report.md
+        echo "" >> security-report.md
+        
+        echo "---" >> security-report.md
+        echo "*Generated by StudyBuddy Security Audit Pipeline*" >> security-report.md
+    
+    - name: Upload security report
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-report-${{ github.run_number }}
+        path: security-report.md
+        retention-days: 90
+    
+    - name: Comment on PR (if applicable)
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          try {
+            const securityReport = fs.readFileSync('security-report.md', 'utf8');
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: securityReport
+            });
+          } catch (error) {
+            console.log('Could not post security report:', error.message);
+          }

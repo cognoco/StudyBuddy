@@ -1,0 +1,182 @@
+# Security Policy Configuration
+
+name: "StudyBuddy Security Policy"
+version: "1.0"
+description: "Security gates and thresholds for CI/CD pipeline"
+
+# Security thresholds and gates
+thresholds:
+  # Critical vulnerabilities - fail the build
+  critical:
+    max_allowed: 0
+    action: "fail"
+    
+  # High severity vulnerabilities - warn but don't fail
+  high:
+    max_allowed: 10
+    action: "warn"
+    
+  # Medium severity vulnerabilities - informational
+  medium:
+    max_allowed: 25
+    action: "info"
+    
+  # Low severity vulnerabilities - track but don't block
+  low:
+    max_allowed: 50
+    action: "track"
+
+# License compliance rules
+licenses:
+  allowed:
+    - "MIT"
+    - "ISC"
+    - "Apache-2.0"
+    - "BSD-2-Clause"
+    - "BSD-3-Clause"
+    - "CC0-1.0"
+    - "Unlicense"
+    - "WTFPL"
+    - "0BSD"
+    
+  forbidden:
+    - "GPL"
+    - "GPL-2.0"
+    - "GPL-3.0"
+    - "AGPL"
+    - "LGPL"
+    - "CPOL"
+    - "EPL"
+    - "MPL"
+    - "CC-BY-SA"
+    - "SSPL"
+    - "BUSL"
+    
+  review_required:
+    - "CC-BY"
+    - "Apache-1.1"
+    - "BSD-4-Clause"
+
+# Secret detection rules
+secrets:
+  # Block commits with secrets
+  block_on_detection: true
+  
+  # Types of secrets to detect
+  types:
+    - "api_keys"
+    - "passwords"
+    - "tokens"
+    - "certificates"
+    - "private_keys"
+    - "database_urls"
+    - "aws_keys"
+    - "google_api_keys"
+    - "expo_tokens"
+    
+  # Exceptions for test files
+  exceptions:
+    - "tests/**/*"
+    - "**/*.test.js"
+    - "**/*.spec.js"
+    - "docs/**/*"
+
+# Code quality security rules
+code_quality:
+  # OWASP Top 10 categories to check
+  owasp_categories:
+    - "A01_Broken_Access_Control"
+    - "A02_Cryptographic_Failures"
+    - "A03_Injection"
+    - "A04_Insecure_Design"
+    - "A05_Security_Misconfiguration"
+    - "A06_Vulnerable_Components"
+    - "A07_Identification_Authentication_Failures"
+    - "A08_Software_Data_Integrity_Failures"
+    - "A09_Security_Logging_Monitoring_Failures"
+    - "A10_Server_Side_Request_Forgery"
+    
+  # CWE categories to monitor
+  cwe_categories:
+    - "CWE-79"   # Cross-site Scripting
+    - "CWE-89"   # SQL Injection  
+    - "CWE-20"   # Input Validation
+    - "CWE-200"  # Information Exposure
+    - "CWE-327"  # Cryptographic Issues
+    - "CWE-352"  # CSRF
+    - "CWE-434"  # File Upload
+    - "CWE-502"  # Deserialization
+
+# Notification settings
+notifications:
+  # Slack webhook for security alerts
+  slack:
+    webhook_url: "${SLACK_SECURITY_WEBHOOK}"
+    channel: "#security-alerts"
+    
+  # Email notifications
+  email:
+    recipients:
+      - "security@studybuddy.com"
+      - "devops@studybuddy.com"
+    
+  # GitHub issue creation
+  github_issues:
+    create_on_critical: true
+    labels: ["security", "critical"]
+    assignees: ["security-team"]
+
+# Exemptions and overrides
+exemptions:
+  # Files to exclude from certain checks
+  file_patterns:
+    - "node_modules/**/*"
+    - "dist/**/*"
+    - "build/**/*"
+    - ".git/**/*"
+    - "coverage/**/*"
+    - "test-reports/**/*"
+    
+  # Packages that may have known issues but are required
+  known_issues:
+    packages:
+      - name: "react-native"
+        reason: "Core dependency - monitor for updates"
+        max_severity: "medium"
+        
+  # Emergency override (use sparingly)
+  emergency_override:
+    enabled: false
+    reason: ""
+    expires: ""
+    authorized_by: ""
+
+# Compliance requirements
+compliance:
+  standards:
+    - "OWASP ASVS"
+    - "NIST Cybersecurity Framework"
+    - "SOC 2 Type II"
+    
+  requirements:
+    - "Data encryption at rest and in transit"
+    - "Secure authentication and authorization"
+    - "Input validation and sanitization"
+    - "Secure error handling"
+    - "Audit logging"
+    - "Dependency vulnerability management"
+
+# Reporting configuration
+reporting:
+  formats:
+    - "sarif"
+    - "json" 
+    - "html"
+    - "markdown"
+    
+  retention:
+    days: 90
+    
+  dashboard:
+    enabled: true
+    update_frequency: "daily"

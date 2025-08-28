@@ -1,0 +1,27 @@
+name: "StudyBuddy CodeQL Configuration"
+
+disable-default-queries: false
+
+queries:
+  - name: security-and-quality
+    uses: security-and-quality
+  - name: security-extended  
+    uses: security-extended
+
+paths:
+  - src/
+  - App.js
+
+paths-ignore:
+  - node_modules/
+  - web-build/
+  - dist/
+  - coverage/
+  - '**/*.test.js'
+  - '**/*.test.jsx'
+  - '**/*.spec.js'
+  - '**/*.spec.jsx'
+
+packs:
+  - javascript-security-and-quality
+  - javascript-code-scanning

@@ -1,0 +1,42 @@
+{
+  "onlyAllow": [
+    "MIT",
+    "ISC", 
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "Unlicense",
+    "WTFPL",
+    "0BSD"
+  ],
+  "excludePackages": [
+    "expo@*",
+    "react-native@*"
+  ],
+  "production": true,
+  "development": false,
+  "summary": true,
+  "customPath": {
+    "licenseText": "license-full-text.txt",
+    "copyright": "copyright-info.txt"
+  },
+  "excludePrivatePackages": true,
+  "failOn": [
+    "GPL",
+    "GPL-2.0",
+    "GPL-3.0",
+    "AGPL",
+    "LGPL",
+    "CPOL",
+    "EPL",
+    "MPL",
+    "CC-BY-SA",
+    "SSPL",
+    "BUSL"
+  ],
+  "relativeLicensePath": true,
+  "direct": false,
+  "start": ".",
+  "unknown": true
+}

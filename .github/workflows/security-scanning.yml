@@ -1,0 +1,362 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [ main, develop, 'feature/**', 'bugfix/**', 'hotfix/**' ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run security scans daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+env:
+  NODE_VERSION: '18'
+  SECURITY_REPORT_PATH: 'security-reports'
+
+jobs:
+  # Job 1: Dependency Vulnerability Scanning
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci --audit
+
+      - name: NPM Security Audit
+        run: |
+          mkdir -p ${{ env.SECURITY_REPORT_PATH }}
+          npm audit --audit-level=moderate --json > ${{ env.SECURITY_REPORT_PATH }}/npm-audit.json || true
+          npm audit --audit-level=moderate > ${{ env.SECURITY_REPORT_PATH }}/npm-audit.txt || true
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Authenticate Snyk
+        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+        if: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Snyk Vulnerability Scan
+        run: |
+          snyk test --json > ${{ env.SECURITY_REPORT_PATH }}/snyk-test.json || true
+          snyk test > ${{ env.SECURITY_REPORT_PATH }}/snyk-test.txt || true
+        if: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Snyk Monitor (Track Dependencies)
+        run: snyk monitor
+        if: ${{ secrets.SNYK_TOKEN && github.ref == 'refs/heads/main' }}
+
+      - name: Upload Dependency Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-results
+          path: ${{ env.SECURITY_REPORT_PATH }}
+          retention-days: 30
+
+  # Job 2: Code Security Analysis with CodeQL
+  codeql-analysis:
+    name: CodeQL Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'javascript' ]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"
+
+  # Job 3: Secret Detection
+  secret-scan:
+    name: Secret Detection Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog Secret Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+          extra_args: --debug --only-verified
+
+      - name: GitLeaks Secret Detection
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-path: .gitleaks.toml
+
+      - name: Install detect-secrets
+        run: |
+          python -m pip install --upgrade pip
+          pip install detect-secrets
+
+      - name: Run detect-secrets
+        run: |
+          mkdir -p ${{ env.SECURITY_REPORT_PATH }}
+          detect-secrets scan --all-files --baseline .secrets.baseline
+          detect-secrets audit .secrets.baseline --report > ${{ env.SECURITY_REPORT_PATH }}/secrets-audit.json || true
+
+      - name: Upload Secret Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: secret-scan-results
+          path: ${{ env.SECURITY_REPORT_PATH }}
+          retention-days: 30
+
+  # Job 4: OWASP Dependency Check
+  owasp-dependency-check:
+    name: OWASP Dependency Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Run OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        env:
+          JAVA_HOME: /opt/java/openjdk
+        with:
+          project: 'StudyBuddy'
+          path: '.'
+          format: 'ALL'
+          out: 'owasp-reports'
+          args: >
+            --enableRetired
+            --enableExperimental
+            --nodeAuditSkipDevDependencies
+            --nodePackageSkipDevDependencies
+            --nvdApiKey ${{ secrets.NVD_API_KEY }}
+
+      - name: Upload OWASP Dependency Check Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-dependency-check-results
+          path: owasp-reports
+          retention-days: 30
+
+  # Job 5: License Compliance Scanning
+  license-scan:
+    name: License Compliance Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Install License Checker
+        run: npm install -g license-checker license-checker-rseidelsohn
+
+      - name: Run License Compliance Check
+        run: |
+          mkdir -p ${{ env.SECURITY_REPORT_PATH }}
+          license-checker --json > ${{ env.SECURITY_REPORT_PATH }}/licenses.json
+          license-checker --csv > ${{ env.SECURITY_REPORT_PATH }}/licenses.csv
+          license-checker-rseidelsohn --excludePackages "$(cat .license-checker-rc.json | jq -r '.excludePackages // "" | join(";")')" --onlyAllow "$(cat .license-checker-rc.json | jq -r '.onlyAllow // [] | join(";")')" --summary > ${{ env.SECURITY_REPORT_PATH }}/license-summary.txt || true
+
+      - name: FOSSA License Scan
+        run: |
+          curl -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/fossas/fossa-cli/master/install-latest.sh | bash
+          fossa analyze
+          fossa test --timeout 300
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        if: ${{ secrets.FOSSA_API_KEY }}
+
+      - name: Upload License Scan Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-scan-results
+          path: ${{ env.SECURITY_REPORT_PATH }}
+          retention-days: 30
+
+  # Job 6: Container Security Scanning (if applicable)
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    if: ${{ hashFiles('Dockerfile', 'docker-compose.yml', '.dockerignore') != '' }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: docker build -t study-buddy:security-scan .
+
+      - name: Run Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'study-buddy:security-scan'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy Scan Results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Job 7: Security Report Aggregation
+  security-report:
+    name: Aggregate Security Reports
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, codeql-analysis, secret-scan, owasp-dependency-check, license-scan]
+    if: always()
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download All Security Reports
+        uses: actions/download-artifact@v4
+        with:
+          path: security-artifacts
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Security Report Tools
+        run: |
+          pip install jq pyyaml requests tabulate
+
+      - name: Generate Consolidated Security Report
+        run: |
+          python scripts/security/generate-security-report.py \
+            --input-dir security-artifacts \
+            --output-dir consolidated-security-report \
+            --format html,json,markdown
+
+      - name: Upload Consolidated Security Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-security-report
+          path: consolidated-security-report
+          retention-days: 90
+
+      - name: Comment PR with Security Summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'consolidated-security-report/security-summary.md';
+            
+            if (fs.existsSync(path)) {
+              const summary = fs.readFileSync(path, 'utf8');
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 🔒 Security Scan Summary\n\n${summary}`
+              });
+            }
+
+  # Job 8: Security Gates and Policies
+  security-gates:
+    name: Security Gates
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, secret-scan, owasp-dependency-check]
+    if: always()
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download Security Reports
+        uses: actions/download-artifact@v4
+        with:
+          path: security-reports
+
+      - name: Evaluate Security Policies
+        run: |
+          python scripts/security/evaluate-security-policies.py \
+            --reports-dir security-reports \
+            --policy-file .github/security/security-policy.yml \
+            --output security-gate-results.json
+
+      - name: Check Security Gates
+        run: |
+          if [ -f security-gate-results.json ]; then
+            CRITICAL_ISSUES=$(jq '.critical_issues_count' security-gate-results.json)
+            HIGH_ISSUES=$(jq '.high_issues_count' security-gate-results.json)
+            
+            echo "Critical Issues: $CRITICAL_ISSUES"
+            echo "High Issues: $HIGH_ISSUES"
+            
+            if [ "$CRITICAL_ISSUES" -gt 0 ]; then
+              echo "❌ Security Gate FAILED: Critical vulnerabilities found"
+              exit 1
+            fi
+            
+            if [ "$HIGH_ISSUES" -gt 10 ]; then
+              echo "⚠️  Security Gate WARNING: High number of high-severity issues"
+              # Don't fail on high issues, just warn
+            fi
+            
+            echo "✅ Security Gate PASSED"
+          fi

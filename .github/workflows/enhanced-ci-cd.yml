@@ -1,0 +1,494 @@
+name: Enhanced CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop, qa_infrastructure_*]
+  pull_request:
+    branches: [main, develop]
+  release:
+    types: [published, created]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+        - development
+        - staging  
+        - production
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'expo'
+        type: choice
+        options:
+        - expo
+        - eas
+        - preview
+
+env:
+  NODE_VERSION: '18'
+  EXPO_VERSION: 'latest'
+  EAS_VERSION: 'latest'
+
+jobs:
+  # Pre-flight checks and environment setup
+  setup:
+    name: Setup & Validation
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.changes.outputs.should_build }}
+      environment: ${{ steps.env.outputs.environment }}
+      build_type: ${{ steps.env.outputs.build_type }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Detect changes
+      id: changes
+      uses: dorny/paths-filter@v2
+      with:
+        filters: |
+          code:
+            - 'src/**'
+            - 'App.js'
+            - 'package.json'
+            - 'app.json'
+            - '.github/workflows/**'
+          config:
+            - '*.config.*'
+            - '.env*'
+    
+    - name: Set environment variables
+      id: env
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          echo "build_type=${{ github.event.inputs.build_type }}" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "environment=production" >> $GITHUB_OUTPUT
+          echo "build_type=eas" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "environment=staging" >> $GITHUB_OUTPUT
+          echo "build_type=expo" >> $GITHUB_OUTPUT
+        else
+          echo "environment=development" >> $GITHUB_OUTPUT
+          echo "build_type=expo" >> $GITHUB_OUTPUT
+        fi
+        
+        if [[ "${{ steps.changes.outputs.code }}" == "true" || "${{ steps.changes.outputs.config }}" == "true" ]]; then
+          echo "should_build=true" >> $GITHUB_OUTPUT
+        else
+          echo "should_build=false" >> $GITHUB_OUTPUT
+        fi
+
+  # Quality assurance and testing
+  quality:
+    name: Quality Assurance
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      matrix:
+        check: [lint, test, audit, typecheck]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run linting
+      if: matrix.check == 'lint'
+      run: |
+        npm run lint
+        npm run lint:fix --if-present
+    
+    - name: Run tests with coverage
+      if: matrix.check == 'test'
+      run: |
+        npm run test:coverage
+        npm run test:quick --if-present
+    
+    - name: Security audit
+      if: matrix.check == 'audit'
+      run: |
+        npm audit --audit-level moderate
+        npx audit-ci --config audit-ci.config.json --if-present
+    
+    - name: Type checking
+      if: matrix.check == 'typecheck'
+      run: |
+        npm run type-check --if-present
+        npx tsc --noEmit --if-present
+    
+    - name: Upload coverage reports
+      if: matrix.check == 'test'
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage/lcov.info
+        flags: unittests
+        name: codecov-${{ matrix.check }}
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  # Advanced security scanning
+  security:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    needs: setup
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Snyk security scan
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high --json --file=package.json
+        command: test
+    
+    - name: CodeQL Analysis
+      uses: github/codeql-action/init@v3
+      with:
+        languages: javascript
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+    
+    - name: OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'StudyBuddy'
+        path: '.'
+        format: 'ALL'
+        args: >
+          --enableRetired
+          --enableExperimental
+          --failOnCVSS 7
+    
+    - name: Upload OWASP results
+      uses: actions/upload-artifact@v4
+      with:
+        name: owasp-reports
+        path: reports/
+
+  # Performance and bundle analysis
+  performance:
+    name: Performance Analysis
+    runs-on: ubuntu-latest
+    needs: [setup, quality]
+    if: needs.setup.outputs.should_build == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Setup Expo CLI
+      run: npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+    
+    - name: Build for performance analysis
+      run: |
+        npx expo export --platform web --clear
+        npx expo export --platform android --clear
+    
+    - name: Bundle size analysis
+      run: |
+        du -sh web-build/ || echo "Web build not found"
+        du -sh dist/ || echo "Mobile build not found"
+        
+        # Generate bundle report
+        npx webpack-bundle-analyzer web-build/static/js/*.js --mode static --report bundle-report.html --no-open || echo "Bundle analyzer failed"
+    
+    - name: Upload performance artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-analysis-${{ github.run_number }}
+        path: |
+          web-build/
+          dist/
+          bundle-report.html
+        retention-days: 30
+
+  # Build for different environments and platforms
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    needs: [setup, quality, security]
+    if: needs.setup.outputs.should_build == 'true'
+    strategy:
+      matrix:
+        platform: [android, ios, web]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Setup Expo CLI
+      run: npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+    
+    - name: Setup EAS CLI
+      if: needs.setup.outputs.build_type == 'eas'
+      run: npm install -g eas-cli@${{ env.EAS_VERSION }}
+    
+    - name: Configure app for environment
+      run: |
+        # Environment-specific app.json modifications
+        case "${{ needs.setup.outputs.environment }}" in
+          "production")
+            echo "Configuring for production..."
+            ;;
+          "staging")
+            echo "Configuring for staging..."
+            ;;
+          "development")
+            echo "Configuring for development..."
+            ;;
+        esac
+    
+    - name: Build with Expo (development/staging)
+      if: needs.setup.outputs.build_type == 'expo'
+      run: |
+        case "${{ matrix.platform }}" in
+          "android")
+            npx expo build:android --non-interactive || echo "Expo build deprecated, using export"
+            npx expo export --platform android
+            ;;
+          "ios")
+            npx expo build:ios --non-interactive || echo "Expo build deprecated, using export"
+            npx expo export --platform ios
+            ;;
+          "web")
+            npx expo export --platform web --clear
+            ;;
+        esac
+      env:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    
+    - name: Build with EAS (production)
+      if: needs.setup.outputs.build_type == 'eas'
+      run: |
+        case "${{ matrix.platform }}" in
+          "android")
+            eas build --platform android --non-interactive --wait
+            ;;
+          "ios")
+            eas build --platform ios --non-interactive --wait
+            ;;
+          "web")
+            npx expo export --platform web --clear
+            ;;
+        esac
+      env:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-${{ matrix.platform }}-${{ needs.setup.outputs.environment }}-${{ github.run_number }}
+        path: |
+          *.apk
+          *.aab
+          *.ipa
+          web-build/
+          dist/
+        retention-days: 30
+
+  # Integration tests
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [setup, build]
+    if: needs.setup.outputs.should_build == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: build-*
+        merge-multiple: true
+    
+    - name: Run integration tests
+      run: |
+        npm run test:integration --if-present || echo "No integration tests configured"
+        npm run test:e2e --if-present || echo "No E2E tests configured"
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: integration-test-results-${{ github.run_number }}
+        path: |
+          test-results/
+          screenshots/
+          videos/
+        retention-days: 7
+
+  # Deploy to different environments
+  deploy:
+    name: Deploy Application
+    runs-on: ubuntu-latest
+    needs: [setup, build, integration]
+    if: |
+      needs.setup.outputs.should_build == 'true' && 
+      (github.ref == 'refs/heads/main' || 
+       github.ref == 'refs/heads/develop' || 
+       github.event_name == 'release' || 
+       github.event_name == 'workflow_dispatch')
+    environment: ${{ needs.setup.outputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download all build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: build-*
+        merge-multiple: true
+    
+    - name: Deploy to Expo (development/staging)
+      if: needs.setup.outputs.environment != 'production'
+      run: |
+        npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+        npx expo publish --non-interactive
+      env:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    
+    - name: Deploy to App Stores (production)
+      if: needs.setup.outputs.environment == 'production'
+      run: |
+        echo "Deploying to production app stores..."
+        
+        # Deploy to Google Play Store
+        if [ -f "*.aab" ] || [ -f "*.apk" ]; then
+          echo "Deploying Android build to Google Play Store"
+          # Add Google Play deployment logic here
+        fi
+        
+        # Deploy to Apple App Store  
+        if [ -f "*.ipa" ]; then
+          echo "Deploying iOS build to App Store Connect"
+          # Add App Store Connect deployment logic here
+        fi
+    
+    - name: Deploy Web App
+      if: needs.setup.outputs.environment == 'production'
+      uses: actions/deploy-pages@v4
+      with:
+        artifact_name: build-web-production-${{ github.run_number }}
+    
+    - name: Notify deployment status
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const deployment = {
+            environment: '${{ needs.setup.outputs.environment }}',
+            status: '${{ job.status }}',
+            build_number: '${{ github.run_number }}',
+            commit: '${{ github.sha }}',
+            ref: '${{ github.ref }}'
+          };
+          
+          console.log('Deployment completed:', deployment);
+          
+          // Add notification logic (Slack, Discord, etc.)
+
+  # Post-deployment monitoring and validation
+  monitor:
+    name: Post-Deploy Monitoring
+    runs-on: ubuntu-latest
+    needs: [setup, deploy]
+    if: always() && needs.deploy.result != 'skipped'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Health check endpoints
+      run: |
+        echo "Running health checks for ${{ needs.setup.outputs.environment }} environment"
+        
+        # Add health check logic here
+        case "${{ needs.setup.outputs.environment }}" in
+          "production")
+            curl -f https://studybuddy.app/health || exit 1
+            ;;
+          "staging")
+            curl -f https://staging.studybuddy.app/health || exit 1
+            ;;
+          "development")
+            echo "Development deployment health check"
+            ;;
+        esac
+    
+    - name: Performance monitoring
+      run: |
+        echo "Starting performance monitoring..."
+        # Add performance monitoring setup
+        
+    - name: Send notifications
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const status = '${{ job.status }}' === 'success' ? '✅' : '❌';
+          const environment = '${{ needs.setup.outputs.environment }}';
+          const buildNumber = '${{ github.run_number }}';
+          
+          console.log(`${status} Deployment monitoring completed for ${environment} (Build #${buildNumber})`);

@@ -1,0 +1,421 @@
+name: Security Monitoring & Compliance
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+    - cron: '0 14 * * 1' # Weekly on Monday at 2 PM UTC
+  push:
+    branches: [main]
+    paths:
+      - 'package*.json'
+      - '.github/workflows/**'
+      - 'src/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'package*.json'
+  workflow_dispatch:
+    inputs:
+      scan_depth:
+        description: 'Scan depth (quick, standard, deep)'
+        required: false
+        default: 'standard'
+        type: choice
+        options:
+          - quick
+          - standard
+          - deep
+      compliance_check:
+        description: 'Run compliance checks'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  NODE_VERSION: '18'
+  SECURITY_BASELINE_SCORE: 80
+
+jobs:
+  # Dependency vulnerability monitoring
+  dependency_security:
+    name: Dependency Security Monitoring
+    runs-on: ubuntu-latest
+    outputs:
+      vulnerability_count: ${{ steps.scan.outputs.vulnerability_count }}
+      security_score: ${{ steps.scan.outputs.security_score }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci --audit=false
+    
+    - name: Run comprehensive dependency scan
+      id: scan
+      run: |
+        echo "Running comprehensive dependency security scan..."
+        
+        # Create reports directory
+        mkdir -p security-monitoring
+        
+        # NPM audit with detailed output
+        echo "Running npm audit..."
+        npm audit --audit-level=low --json > security-monitoring/npm-audit-full.json || true
+        npm audit --audit-level=low > security-monitoring/npm-audit.txt || true
+        
+        # Extract vulnerability counts
+        if [ -f security-monitoring/npm-audit-full.json ]; then
+          critical=$(jq -r '.metadata.vulnerabilities.critical // 0' security-monitoring/npm-audit-full.json)
+          high=$(jq -r '.metadata.vulnerabilities.high // 0' security-monitoring/npm-audit-full.json)
+          moderate=$(jq -r '.metadata.vulnerabilities.moderate // 0' security-monitoring/npm-audit-full.json)
+          low=$(jq -r '.metadata.vulnerabilities.low // 0' security-monitoring/npm-audit-full.json)
+          
+          total_vulns=$((critical + high + moderate + low))
+          
+          echo "vulnerability_count=$total_vulns" >> $GITHUB_OUTPUT
+          echo "critical_count=$critical" >> $GITHUB_OUTPUT
+          echo "high_count=$high" >> $GITHUB_OUTPUT
+          
+          # Calculate security score
+          security_score=$((100 - critical * 25 - high * 10 - moderate * 5 - low * 1))
+          if [ $security_score -lt 0 ]; then security_score=0; fi
+          
+          echo "security_score=$security_score" >> $GITHUB_OUTPUT
+          
+          echo "Found vulnerabilities - Critical: $critical, High: $high, Moderate: $moderate, Low: $low"
+          echo "Security Score: $security_score/100"
+        else
+          echo "vulnerability_count=0" >> $GITHUB_OUTPUT
+          echo "security_score=100" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Check for outdated packages
+      run: |
+        echo "Checking for outdated packages..."
+        npm outdated --json > security-monitoring/outdated-packages.json || true
+        npm outdated > security-monitoring/outdated-packages.txt || true
+        
+        # Count outdated packages
+        outdated_count=0
+        if [ -f security-monitoring/outdated-packages.json ]; then
+          outdated_count=$(jq 'length' security-monitoring/outdated-packages.json)
+        fi
+        
+        echo "Found $outdated_count outdated packages"
+        echo "outdated_packages_count=$outdated_count" >> $GITHUB_ENV
+    
+    - name: Generate dependency security report
+      run: |
+        cat > security-monitoring/dependency-report.md <<EOF
+        # Dependency Security Report
+        
+        **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        **Repository**: ${{ github.repository }}
+        **Branch**: ${{ github.ref_name }}
+        **Commit**: ${{ github.sha }}
+        
+        ## Summary
+        
+        - **Total Vulnerabilities**: ${{ steps.scan.outputs.vulnerability_count }}
+        - **Security Score**: ${{ steps.scan.outputs.security_score }}/100
+        - **Outdated Packages**: ${outdated_packages_count}
+        
+        ## Vulnerability Breakdown
+        
+        - **Critical**: ${{ steps.scan.outputs.critical_count }}
+        - **High**: ${{ steps.scan.outputs.high_count }}
+        
+        ## Recommendations
+        
+        EOF
+        
+        # Add specific recommendations based on findings
+        if [ "${{ steps.scan.outputs.vulnerability_count }}" -gt 0 ]; then
+          echo "- 🚨 Run \`npm audit fix\` to automatically fix vulnerabilities" >> security-monitoring/dependency-report.md
+          echo "- 📊 Review detailed vulnerability report for manual fixes" >> security-monitoring/dependency-report.md
+        fi
+        
+        if [ "${outdated_packages_count}" -gt 10 ]; then
+          echo "- 📦 Consider updating outdated packages with \`npm update\`" >> security-monitoring/dependency-report.md
+        fi
+    
+    - name: Upload dependency reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-security-reports-${{ github.run_number }}
+        path: security-monitoring/
+        retention-days: 90
+
+  # License compliance monitoring
+  license_compliance:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+    if: github.event.inputs.compliance_check != 'false'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci --audit=false
+    
+    - name: Install license checker
+      run: npm install -g license-checker
+    
+    - name: Generate license report
+      run: |
+        mkdir -p compliance-reports
+        
+        echo "Generating license compliance report..."
+        license-checker --json --out compliance-reports/licenses.json || true
+        license-checker --csv --out compliance-reports/licenses.csv || true
+        license-checker --summary --out compliance-reports/license-summary.txt || true
+    
+    - name: Check for problematic licenses
+      run: |
+        echo "Checking for potentially problematic licenses..."
+        
+        # List of licenses that might require review
+        problematic_licenses=(
+          "GPL-2.0"
+          "GPL-3.0"
+          "AGPL-1.0"
+          "AGPL-3.0"
+          "LGPL-2.1"
+          "LGPL-3.0"
+          "CDDL-1.0"
+          "CDDL-1.1"
+          "EPL-1.0"
+          "EPL-2.0"
+        )
+        
+        found_issues=0
+        
+        if [ -f compliance-reports/licenses.json ]; then
+          for license in "${problematic_licenses[@]}"; do
+            if grep -q "$license" compliance-reports/licenses.json; then
+              echo "⚠️  Found potentially problematic license: $license"
+              found_issues=$((found_issues + 1))
+            fi
+          done
+        fi
+        
+        if [ $found_issues -eq 0 ]; then
+          echo "✅ No problematic licenses found"
+        else
+          echo "⚠️  Found $found_issues potentially problematic licenses - review required"
+        fi
+        
+        echo "problematic_licenses_count=$found_issues" >> $GITHUB_ENV
+    
+    - name: Generate compliance summary
+      run: |
+        total_packages=$(jq 'length' compliance-reports/licenses.json 2>/dev/null || echo 0)
+        problematic_count=${problematic_licenses_count:-0}
+        
+        cat > compliance-reports/compliance-summary.md <<EOF
+        # License Compliance Report
+        
+        **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        **Total Packages**: $total_packages
+        **Potentially Problematic Licenses**: $problematic_count
+        
+        ## Status
+        
+        EOF
+        
+        if [ $problematic_count -eq 0 ]; then
+          echo "✅ **COMPLIANT** - No problematic licenses detected" >> compliance-reports/compliance-summary.md
+        else
+          echo "⚠️  **REVIEW REQUIRED** - Potentially problematic licenses found" >> compliance-reports/compliance-summary.md
+        fi
+    
+    - name: Upload compliance reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: license-compliance-reports-${{ github.run_number }}
+        path: compliance-reports/
+        retention-days: 90
+
+  # Code quality security analysis
+  code_security:
+    name: Code Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci --audit=false
+    
+    - name: Run ESLint security analysis
+      run: |
+        echo "Running ESLint security analysis..."
+        mkdir -p code-security-reports
+        
+        # Install security-focused ESLint plugins
+        npm install --no-save eslint-plugin-security eslint-plugin-no-secrets
+        
+        # Create security-focused ESLint config
+        cat > .eslintrc.security.json <<EOF
+        {
+          "extends": ["./.eslintrc.js"],
+          "plugins": ["security", "no-secrets"],
+          "rules": {
+            "security/detect-buffer-noassert": "error",
+            "security/detect-child-process": "error",
+            "security/detect-disable-mustache-escape": "error",
+            "security/detect-eval-with-expression": "error",
+            "security/detect-no-csrf-before-method-override": "error",
+            "security/detect-non-literal-fs-filename": "error",
+            "security/detect-non-literal-regexp": "error",
+            "security/detect-non-literal-require": "error",
+            "security/detect-object-injection": "error",
+            "security/detect-possible-timing-attacks": "error",
+            "security/detect-pseudoRandomBytes": "error",
+            "security/detect-unsafe-regex": "error",
+            "no-secrets/no-secrets": "error"
+          }
+        }
+        EOF
+        
+        # Run security linting
+        npx eslint src/ --config .eslintrc.security.json --format json --output-file code-security-reports/eslint-security.json || true
+        npx eslint src/ --config .eslintrc.security.json > code-security-reports/eslint-security.txt || true
+    
+    - name: Analyze code security results
+      run: |
+        echo "Analyzing code security scan results..."
+        
+        security_issues=0
+        if [ -f code-security-reports/eslint-security.json ]; then
+          # Count security-related issues
+          security_issues=$(jq '[.[] | select(.messages != []) | .messages[] | select(.ruleId | test("security/|no-secrets/"))] | length' code-security-reports/eslint-security.json)
+        fi
+        
+        echo "Found $security_issues code security issues"
+        echo "code_security_issues=$security_issues" >> $GITHUB_ENV
+    
+    - name: Upload code security reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: code-security-reports-${{ github.run_number }}
+        path: code-security-reports/
+        retention-days: 90
+
+  # Security monitoring summary
+  security_summary:
+    name: Security Monitoring Summary
+    runs-on: ubuntu-latest
+    needs: [dependency_security, license_compliance, code_security]
+    if: always()
+    
+    steps:
+    - name: Generate security dashboard
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const dependencyScore = '${{ needs.dependency_security.outputs.security_score }}' || '0';
+          const vulnerabilityCount = '${{ needs.dependency_security.outputs.vulnerability_count }}' || '0';
+          const codeSecurityIssues = process.env.code_security_issues || '0';
+          const problematicLicenses = process.env.problematic_licenses_count || '0';
+          
+          // Calculate overall security status
+          const overallScore = Math.round(
+            (parseInt(dependencyScore) * 0.6) +  // Dependencies: 60%
+            ((100 - parseInt(codeSecurityIssues) * 10) * 0.3) +  // Code security: 30%
+            ((problematicLicenses === '0' ? 100 : 70) * 0.1)  // License compliance: 10%
+          );
+          
+          let securityStatus, emoji;
+          if (overallScore >= 90) {
+            securityStatus = 'Excellent';
+            emoji = '🟢';
+          } else if (overallScore >= 75) {
+            securityStatus = 'Good';
+            emoji = '🟡';
+          } else if (overallScore >= 60) {
+            securityStatus = 'Fair';
+            emoji = '🟠';
+          } else {
+            securityStatus = 'Poor';
+            emoji = '🔴';
+          }
+          
+          const summary = `# 🛡️ Security Monitoring Dashboard\n\n` +
+            `**Overall Security Score**: ${overallScore}/100 ${emoji}\n` +
+            `**Status**: ${securityStatus}\n\n` +
+            `## Security Metrics\n\n` +
+            `| Category | Score/Count | Status |\n` +
+            `|----------|-------------|--------|\n` +
+            `| Dependencies | ${dependencyScore}/100 | ${parseInt(vulnerabilityCount) === 0 ? '✅' : '⚠️'} |\n` +
+            `| Code Security | ${Math.max(0, 100 - parseInt(codeSecurityIssues) * 10)}/100 | ${parseInt(codeSecurityIssues) === 0 ? '✅' : '⚠️'} |\n` +
+            `| License Compliance | ${problematicLicenses === '0' ? '100' : '70'}/100 | ${problematicLicenses === '0' ? '✅' : '⚠️'} |\n\n` +
+            `## Findings\n\n` +
+            `- **Vulnerabilities**: ${vulnerabilityCount} total\n` +
+            `- **Code Security Issues**: ${codeSecurityIssues}\n` +
+            `- **License Issues**: ${problematicLicenses}\n\n` +
+            `## Recommendations\n\n`;
+          
+          let recommendations = '';
+          
+          if (parseInt(vulnerabilityCount) > 0) {
+            recommendations += '- 🔴 **URGENT**: Fix dependency vulnerabilities with `npm audit fix`\n';
+          }
+          if (parseInt(codeSecurityIssues) > 0) {
+            recommendations += '- 🟡 **REVIEW**: Address code security issues found by ESLint\n';
+          }
+          if (problematicLicenses !== '0') {
+            recommendations += '- 🟡 **REVIEW**: Review potentially problematic licenses\n';
+          }
+          if (overallScore >= 90) {
+            recommendations += '- ✅ **EXCELLENT**: Security posture is strong. Continue monitoring.\n';
+          }
+          
+          const fullSummary = summary + recommendations + `\n---\n*Last updated: ${new Date().toISOString()}*`;
+          
+          console.log(fullSummary);
+          
+          // Add to step summary
+          await core.summary.addRaw(fullSummary).write();
+          
+          // Set outputs for potential notifications
+          core.setOutput('overall_score', overallScore);
+          core.setOutput('security_status', securityStatus);
+          core.setOutput('needs_attention', overallScore < parseInt(process.env.SECURITY_BASELINE_SCORE || '80'));
+    
+    - name: Security alert check
+      if: steps.security_summary.outputs.needs_attention == 'true'
+      run: |
+        echo "🚨 Security baseline not met!"
+        echo "Current score: ${{ steps.security_summary.outputs.overall_score }}"
+        echo "Required baseline: ${{ env.SECURITY_BASELINE_SCORE }}"
+        echo "Status: ${{ steps.security_summary.outputs.security_status }}"
+        
+        # You could add notifications here (Slack, email, etc.)
+        # exit 1  # Uncomment to fail the workflow on security baseline breach

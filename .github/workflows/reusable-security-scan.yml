@@ -1,0 +1,410 @@
+name: Reusable Security Scan Workflow
+
+on:
+  workflow_call:
+    inputs:
+      scan_type:
+        description: 'Type of security scan (full, quick, dependencies)'
+        required: false
+        default: 'full'
+        type: string
+      severity_threshold:
+        description: 'Security severity threshold (low, medium, high, critical)'
+        required: false
+        default: 'medium'
+        type: string
+      fail_on_issues:
+        description: 'Fail workflow if security issues found'
+        required: false
+        default: true
+        type: boolean
+      upload_sarif:
+        description: 'Upload SARIF results to GitHub'
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      security_score:
+        description: 'Overall security score (0-100)'
+        value: ${{ jobs.security_scan.outputs.security_score }}
+      critical_issues:
+        description: 'Number of critical security issues'
+        value: ${{ jobs.security_scan.outputs.critical_issues }}
+      high_issues:
+        description: 'Number of high severity issues'
+        value: ${{ jobs.security_scan.outputs.high_issues }}
+      scan_results:
+        description: 'Summary of scan results'
+        value: ${{ jobs.security_scan.outputs.scan_results }}
+    secrets:
+      SNYK_TOKEN:
+        description: 'Snyk authentication token'
+        required: false
+      GITHUB_TOKEN:
+        description: 'GitHub token for CodeQL and SARIF upload'
+        required: true
+      SONAR_TOKEN:
+        description: 'SonarQube token'
+        required: false
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  security_scan:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    outputs:
+      security_score: ${{ steps.score.outputs.security_score }}
+      critical_issues: ${{ steps.results.outputs.critical_issues }}
+      high_issues: ${{ steps.results.outputs.high_issues }}
+      scan_results: ${{ steps.summary.outputs.scan_results }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci --audit=false
+    
+    - name: Create security reports directory
+      run: mkdir -p security-reports
+    
+    # NPM Audit
+    - name: NPM Security Audit
+      if: inputs.scan_type != 'quick'
+      run: |
+        echo "Running NPM security audit..."
+        npm audit --audit-level ${{ inputs.severity_threshold }} --json > security-reports/npm-audit.json || true
+        npm audit --audit-level ${{ inputs.severity_threshold }} > security-reports/npm-audit.txt || true
+        
+        # Generate summary
+        if [ -f security-reports/npm-audit.json ]; then
+          jq '.metadata.vulnerabilities' security-reports/npm-audit.json > security-reports/npm-vulnerabilities.json
+        fi
+    
+    # Snyk Security Scan
+    - name: Snyk Security Scan
+      if: secrets.SNYK_TOKEN != '' && inputs.scan_type != 'quick'
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=${{ inputs.severity_threshold }} --json --file=package.json
+        command: test
+      continue-on-error: true
+    
+    - name: Save Snyk results
+      if: secrets.SNYK_TOKEN != '' && inputs.scan_type != 'quick'
+      run: |
+        if [ -f snyk.json ]; then
+          mv snyk.json security-reports/snyk-results.json
+        fi
+    
+    # CodeQL Analysis
+    - name: Initialize CodeQL
+      if: inputs.scan_type == 'full'
+      uses: github/codeql-action/init@v3
+      with:
+        languages: javascript
+        queries: security-and-quality
+        config: |
+          name: "Security CodeQL Config"
+          queries:
+            - uses: security-and-quality
+            - uses: security-extended
+    
+    - name: Perform CodeQL Analysis
+      if: inputs.scan_type == 'full'
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:javascript"
+        upload: ${{ inputs.upload_sarif }}
+        output: security-reports/codeql
+    
+    # Dependency Vulnerability Check
+    - name: OWASP Dependency Check
+      if: inputs.scan_type == 'full'
+      uses: dependency-check/Dependency-Check_Action@main
+      id: depcheck
+      with:
+        project: 'StudyBuddy'
+        path: '.'
+        format: 'ALL'
+        args: >
+          --enableRetired
+          --enableExperimental
+          --failOnCVSS 7
+          --exclude "**/node_modules/**"
+          --exclude "**/*.test.js"
+          --exclude "**/*.spec.js"
+      continue-on-error: true
+    
+    - name: Move OWASP reports
+      if: inputs.scan_type == 'full'
+      run: |
+        if [ -d "reports" ]; then
+          mv reports/* security-reports/ || true
+        fi
+    
+    # Secret Scanning (custom)
+    - name: Secret Detection Scan
+      run: |
+        echo "Scanning for secrets and sensitive data..."
+        
+        # Simple regex-based secret detection
+        secret_patterns=(
+          "password[\s]*[:=][\s]*['\"][^'\"\n]{8,}['\"]"  # passwords
+          "api[_-]?key[\s]*[:=][\s]*['\"][^'\"\n]{16,}['\"]"  # API keys
+          "secret[\s]*[:=][\s]*['\"][^'\"\n]{16,}['\"]"  # secrets
+          "token[\s]*[:=][\s]*['\"][^'\"\n]{16,}['\"]"   # tokens
+          "pk_[a-zA-Z0-9]{32,}"  # Stripe publishable keys
+          "sk_[a-zA-Z0-9]{32,}"  # Stripe secret keys
+          "AKIA[0-9A-Z]{16}"     # AWS Access Key ID
+          "[0-9a-f]{40}"          # Generic 40-char hex (GitHub tokens, etc.)
+        )
+        
+        secret_count=0
+        for pattern in "${secret_patterns[@]}"; do
+          matches=$(grep -rE "$pattern" src/ --include="*.js" --include="*.jsx" --include="*.ts" --include="*.tsx" || true)
+          if [ ! -z "$matches" ]; then
+            echo "Potential secret found with pattern: $pattern"
+            echo "$matches" >> security-reports/secrets.txt
+            secret_count=$((secret_count + 1))
+          fi
+        done
+        
+        echo "secret_count=$secret_count" >> $GITHUB_ENV
+        echo "Found $secret_count potential secrets"
+    
+    # Security Headers Check (for web builds)
+    - name: Security Headers Analysis
+      if: inputs.scan_type == 'full'
+      run: |
+        echo "Analyzing security headers configuration..."
+        
+        # Check for security-related configurations
+        security_headers=(
+          "Content-Security-Policy"
+          "X-Frame-Options"
+          "X-Content-Type-Options"
+          "Referrer-Policy"
+          "Permissions-Policy"
+        )
+        
+        headers_score=100
+        missing_headers=()
+        
+        # Check if security headers are configured (basic check)
+        for header in "${security_headers[@]}"; do
+          if ! grep -r "$header" . --include="*.js" --include="*.json" --include="*.html" > /dev/null; then
+            missing_headers+=("$header")
+            headers_score=$((headers_score - 20))
+          fi
+        done
+        
+        echo "Security headers score: $headers_score/100" > security-reports/headers-analysis.txt
+        echo "Missing headers: ${missing_headers[*]}" >> security-reports/headers-analysis.txt
+        echo "headers_score=$headers_score" >> $GITHUB_ENV
+    
+    # Analyze Results
+    - name: Analyze Security Results
+      id: results
+      run: |
+        echo "Analyzing security scan results..."
+        
+        critical_count=0
+        high_count=0
+        medium_count=0
+        low_count=0
+        
+        # Analyze NPM audit results
+        if [ -f security-reports/npm-vulnerabilities.json ]; then
+          npm_critical=$(jq -r '.critical // 0' security-reports/npm-vulnerabilities.json)
+          npm_high=$(jq -r '.high // 0' security-reports/npm-vulnerabilities.json)
+          npm_medium=$(jq -r '.moderate // 0' security-reports/npm-vulnerabilities.json)
+          npm_low=$(jq -r '.low // 0' security-reports/npm-vulnerabilities.json)
+          
+          critical_count=$((critical_count + npm_critical))
+          high_count=$((high_count + npm_high))
+          medium_count=$((medium_count + npm_medium))
+          low_count=$((low_count + npm_low))
+        fi
+        
+        # Add secret detection results
+        secret_count=${secret_count:-0}
+        if [ $secret_count -gt 0 ]; then
+          critical_count=$((critical_count + secret_count))
+        fi
+        
+        # Output results
+        echo "critical_issues=$critical_count" >> $GITHUB_OUTPUT
+        echo "high_issues=$high_count" >> $GITHUB_OUTPUT
+        echo "medium_issues=$medium_count" >> $GITHUB_OUTPUT
+        echo "low_issues=$low_count" >> $GITHUB_OUTPUT
+        
+        # Create summary
+        cat > security-reports/summary.json <<EOF
+        {
+          "critical": $critical_count,
+          "high": $high_count,
+          "medium": $medium_count,
+          "low": $low_count,
+          "secrets": $secret_count,
+          "headers_score": ${headers_score:-100}
+        }
+        EOF
+        
+        echo "Security scan completed:"
+        echo "- Critical: $critical_count"
+        echo "- High: $high_count"
+        echo "- Medium: $medium_count"
+        echo "- Low: $low_count"
+    
+    # Calculate Security Score
+    - name: Calculate Security Score
+      id: score
+      run: |
+        critical_issues=${{ steps.results.outputs.critical_issues }}
+        high_issues=${{ steps.results.outputs.high_issues }}
+        medium_issues=${{ steps.results.outputs.medium_issues }}
+        low_issues=${{ steps.results.outputs.low_issues }}
+        headers_score=${headers_score:-100}
+        
+        # Security score calculation (0-100)
+        # Start with 100, deduct points based on issues
+        security_score=100
+        
+        # Deduct points for vulnerabilities
+        security_score=$((security_score - critical_issues * 25))  # -25 per critical
+        security_score=$((security_score - high_issues * 10))      # -10 per high
+        security_score=$((security_score - medium_issues * 5))     # -5 per medium
+        security_score=$((security_score - low_issues * 1))        # -1 per low
+        
+        # Factor in headers score (weighted 20%)
+        security_score=$((security_score * 80 / 100 + headers_score * 20 / 100))
+        
+        # Ensure score is between 0 and 100
+        if [ $security_score -lt 0 ]; then
+          security_score=0
+        fi
+        if [ $security_score -gt 100 ]; then
+          security_score=100
+        fi
+        
+        echo "security_score=$security_score" >> $GITHUB_OUTPUT
+        echo "Overall Security Score: $security_score/100"
+    
+    # Generate Summary
+    - name: Generate Security Summary
+      id: summary
+      run: |
+        critical_issues=${{ steps.results.outputs.critical_issues }}
+        high_issues=${{ steps.results.outputs.high_issues }}
+        security_score=${{ steps.score.outputs.security_score }}
+        
+        # Generate human-readable summary
+        if [ $security_score -ge 90 ]; then
+          grade="A"
+          status="Excellent"
+        elif [ $security_score -ge 80 ]; then
+          grade="B"
+          status="Good"
+        elif [ $security_score -ge 70 ]; then
+          grade="C"
+          status="Fair"
+        elif [ $security_score -ge 60 ]; then
+          grade="D"
+          status="Poor"
+        else
+          grade="F"
+          status="Critical"
+        fi
+        
+        summary="Security Grade: $grade ($security_score/100) - $status"
+        echo "scan_results=$summary" >> $GITHUB_OUTPUT
+        
+        # Add to step summary
+        echo "## 🔐 Security Scan Results" >> $GITHUB_STEP_SUMMARY
+        echo "- **Overall Grade**: $grade ($security_score/100)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: $status" >> $GITHUB_STEP_SUMMARY
+        echo "- **Critical Issues**: $critical_issues" >> $GITHUB_STEP_SUMMARY
+        echo "- **High Severity Issues**: $high_issues" >> $GITHUB_STEP_SUMMARY
+        echo "- **Scan Type**: ${{ inputs.scan_type }}" >> $GITHUB_STEP_SUMMARY
+    
+    # Check if build should fail
+    - name: Security Gate Check
+      if: inputs.fail_on_issues
+      run: |
+        critical_issues=${{ steps.results.outputs.critical_issues }}
+        high_issues=${{ steps.results.outputs.high_issues }}
+        security_score=${{ steps.score.outputs.security_score }}
+        
+        echo "Security gate check - Critical: $critical_issues, High: $high_issues, Score: $security_score"
+        
+        # Fail conditions based on severity threshold
+        case "${{ inputs.severity_threshold }}" in
+          "critical")
+            if [ $critical_issues -gt 0 ]; then
+              echo "❌ Security gate failed: Critical vulnerabilities found"
+              exit 1
+            fi
+            ;;
+          "high")
+            if [ $critical_issues -gt 0 ] || [ $high_issues -gt 0 ]; then
+              echo "❌ Security gate failed: High or Critical vulnerabilities found"
+              exit 1
+            fi
+            ;;
+          "medium")
+            if [ $security_score -lt 70 ]; then
+              echo "❌ Security gate failed: Security score below threshold (70)"
+              exit 1
+            fi
+            ;;
+          "low")
+            if [ $security_score -lt 50 ]; then
+              echo "❌ Security gate failed: Security score below threshold (50)"
+              exit 1
+            fi
+            ;;
+        esac
+        
+        echo "✅ Security gate passed"
+    
+    # Upload Results
+    - name: Upload Security Reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-reports-${{ github.run_number }}
+        path: security-reports/
+        retention-days: 90
+    
+    # Upload SARIF to GitHub (if CodeQL was run)
+    - name: Upload SARIF to GitHub Security
+      if: inputs.upload_sarif && inputs.scan_type == 'full'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: security-reports/codeql/results.sarif
+      continue-on-error: true
+    
+    - name: Cleanup sensitive data
+      if: always()
+      run: |
+        # Remove any potential sensitive data from reports
+        find security-reports -name "*.json" -exec sed -i 's/"password"[^,}]*/"password":"[REDACTED]"/g' {} \;
+        find security-reports -name "*.json" -exec sed -i 's/"token"[^,}]*/"token":"[REDACTED]"/g' {} \;
+        find security-reports -name "*.txt" -exec sed -i 's/password[=:][^\s]*/password=[REDACTED]/g' {} \;
