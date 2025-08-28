@@ -50,6 +50,12 @@ export default function App() {
   }, []);
 
   const initializeRevenueCat = async () => {
+    // Skip RevenueCat initialization on web
+    if (Platform.OS === 'web') {
+      console.log('RevenueCat not supported on web platform');
+      return;
+    }
+    
     try {
       // Replace with your actual RevenueCat API keys
       const apiKey = Platform.select({
@@ -67,6 +73,12 @@ export default function App() {
   };
 
   const checkPremiumStatus = async () => {
+    // Skip premium check on web platform
+    if (Platform.OS === 'web') {
+      setIsPremium(false);
+      return;
+    }
+    
     try {
       const customerInfo = await Purchases.getCustomerInfo();
       setIsPremium(customerInfo.entitlements.active['premium'] !== undefined);
