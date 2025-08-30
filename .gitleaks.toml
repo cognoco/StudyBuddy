@@ -1,0 +1,115 @@
+# GitLeaks Configuration for Secret Detection
+
+title = "StudyBuddy GitLeaks Configuration"
+
+# Global settings
+[extend]
+useDefault = true
+
+# Custom rules for React Native/Expo specific secrets
+[[rules]]
+id = "expo-token"
+description = "Expo Access Token"
+regex = '''expo_token_[a-zA-Z0-9_-]{40,}'''
+keywords = ["expo_token"]
+secretGroup = 1
+entropy = 3.5
+tags = ["expo", "token"]
+
+[[rules]]
+id = "react-native-keystore"
+description = "React Native Keystore Password"
+regex = '''keystore.*password.*[=:]\s*["']([^"']{8,})["']'''
+keywords = ["keystore", "password", "android"]
+secretGroup = 1
+entropy = 3.0
+tags = ["android", "keystore"]
+
+[[rules]]
+id = "ios-certificate"
+description = "iOS Certificate or Private Key"
+regex = '''-----BEGIN (PRIVATE KEY|CERTIFICATE)-----'''
+keywords = ["BEGIN PRIVATE KEY", "BEGIN CERTIFICATE"]
+secretGroup = 0
+entropy = 0
+tags = ["ios", "certificate"]
+
+[[rules]]
+id = "firebase-config"
+description = "Firebase Configuration"
+regex = '''firebase[A-Za-z]*[=:]\s*["']([^"']{20,})["']'''
+keywords = ["firebase", "apiKey", "authDomain", "projectId"]
+secretGroup = 1
+entropy = 3.0
+tags = ["firebase", "config"]
+
+[[rules]]
+id = "api-key-generic"
+description = "Generic API Key"
+regex = '''(?i)(api[_-]?key|apikey)['"]*\s*[=:]\s*['"][a-zA-Z0-9_-]{20,}['"]'''
+keywords = ["api_key", "apikey", "api-key"]
+secretGroup = 0
+entropy = 3.5
+tags = ["api", "key"]
+
+[[rules]]
+id = "aws-keys"
+description = "AWS Access Keys"
+regex = '''AKIA[0-9A-Z]{16}'''
+keywords = ["AKIA"]
+secretGroup = 0
+entropy = 0
+tags = ["aws", "access-key"]
+
+[[rules]]
+id = "google-api-key"
+description = "Google API Key"
+regex = '''AIza[0-9A-Za-z_-]{35}'''
+keywords = ["AIza"]
+secretGroup = 0
+entropy = 0
+tags = ["google", "api-key"]
+
+# Paths to ignore
+[allowlist]
+description = "Allowlisted files and paths"
+files = [
+    ".gitleaks.toml",
+    ".secrets.baseline",
+    "package-lock.json",
+    "yarn.lock",
+    "tests/**/*",
+    "docs/**/*",
+    "*.md",
+    "*.example",
+    "*.template"
+]
+
+# Specific patterns to ignore (false positives)
+regexes = [
+    '''dummy.*key''',
+    '''example.*secret''',
+    '''test.*token''',
+    '''placeholder.*api''',
+    '''mock.*credential''',
+    '''fake.*password'''
+]
+
+# Keywords to ignore in test files
+stopwords = [
+    "test",
+    "example", 
+    "dummy",
+    "fake",
+    "mock",
+    "placeholder",
+    "sample"
+]
+
+# Git configuration
+[git]
+# Scan all commits
+maxTargetMegaBytes = 10
+
+# Exclude specific commits if needed (by hash)
+# commits = ["commit-hash-to-exclude"]

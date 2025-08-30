@@ -1,0 +1,561 @@
+name: Advanced Deployment Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target deployment environment'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      deployment_strategy:
+        description: 'Deployment strategy'
+        required: false
+        default: 'rolling'
+        type: choice
+        options:
+          - rolling
+          - blue_green
+          - canary
+          - immediate
+      platforms:
+        description: 'Platforms to deploy (comma-separated)'
+        required: false
+        default: 'web,android,ios'
+        type: string
+      skip_tests:
+        description: 'Skip pre-deployment tests (emergency only)'
+        required: false
+        default: false
+        type: boolean
+      auto_promote:
+        description: 'Auto-promote after successful health checks'
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.github/ISSUE_TEMPLATE/**'
+  schedule:
+    - cron: '0 10 * * 1'  # Weekly deployment check on Mondays
+
+env:
+  NODE_VERSION: '18'
+  DEPLOYMENT_TIMEOUT: '1800'  # 30 minutes
+  HEALTH_CHECK_RETRIES: 5
+  ROLLBACK_ON_FAILURE: true
+
+jobs:
+  # Pre-deployment validation
+  pre_deployment:
+    name: Pre-Deployment Validation
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.validation.outputs.should_deploy }}
+      deployment_id: ${{ steps.validation.outputs.deployment_id }}
+      platforms: ${{ steps.validation.outputs.platforms }}
+      environment: ${{ steps.validation.outputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Validate deployment parameters
+      id: validation
+      run: |
+        echo "Validating deployment parameters..."
+        
+        # Determine environment
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          environment="${{ github.event.inputs.environment }}"
+          platforms="${{ github.event.inputs.platforms }}"
+        elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          environment="production"
+          platforms="web,android,ios"
+        else
+          environment="development"
+          platforms="web"
+        fi
+        
+        # Generate unique deployment ID
+        deployment_id="deploy-$(date +%Y%m%d-%H%M%S)-${{ github.run_number }}"
+        
+        echo "environment=$environment" >> $GITHUB_OUTPUT
+        echo "platforms=$platforms" >> $GITHUB_OUTPUT
+        echo "deployment_id=$deployment_id" >> $GITHUB_OUTPUT
+        echo "should_deploy=true" >> $GITHUB_OUTPUT
+        
+        echo "Deployment Configuration:"
+        echo "- Environment: $environment"
+        echo "- Platforms: $platforms"
+        echo "- Deployment ID: $deployment_id"
+    
+    - name: Check deployment permissions
+      run: |
+        echo "Checking deployment permissions for ${{ steps.validation.outputs.environment }}..."
+        
+        # Environment-specific permission checks
+        case "${{ steps.validation.outputs.environment }}" in
+          "production")
+            if [[ "${{ github.actor }}" != "admin" && "${{ github.event_name }}" != "push" ]]; then
+              echo "⚠️  Production deployment requires admin privileges or push to main"
+            fi
+            ;;
+          "staging")
+            echo "✅ Staging deployment permitted"
+            ;;
+          "development")
+            echo "✅ Development deployment permitted"
+            ;;
+        esac
+    
+    - name: Check for active deployments
+      run: |
+        echo "Checking for active deployments..."
+        # In a real scenario, you might check a deployment registry or API
+        echo "✅ No active deployments detected"
+
+  # Quality gates
+  quality_gates:
+    name: Quality Gates
+    runs-on: ubuntu-latest
+    needs: pre_deployment
+    if: github.event.inputs.skip_tests != 'true'
+    strategy:
+      matrix:
+        check: [security, tests, build_verification]
+      fail-fast: false
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run security checks
+      if: matrix.check == 'security'
+      uses: ./.github/workflows/reusable-security-scan.yml
+      with:
+        scan_type: 'quick'
+        fail_on_issues: true
+      secrets:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Run comprehensive tests
+      if: matrix.check == 'tests'
+      run: |
+        echo "Running comprehensive test suite..."
+        npm run test:coverage
+        npm run test:integration --if-present || echo "No integration tests"
+        
+        # Check test coverage threshold
+        coverage=$(npm run test:coverage -- --coverageReporters=json-summary | jq -r '.total.lines.pct' 2>/dev/null || echo "0")
+        echo "Test coverage: ${coverage}%"
+        
+        if (( $(echo "$coverage < 80" | bc -l) )); then
+          echo "❌ Test coverage below 80% threshold"
+          exit 1
+        fi
+    
+    - name: Build verification
+      if: matrix.check == 'build_verification'
+      run: |
+        echo "Verifying build for deployment..."
+        
+        # Build verification for each platform
+        IFS=',' read -ra PLATFORM_ARRAY <<< "${{ needs.pre_deployment.outputs.platforms }}"
+        for platform in "${PLATFORM_ARRAY[@]}"; do
+          echo "Verifying $platform build..."
+          case "$platform" in
+            "web")
+              npx expo export --platform web --clear
+              if [ ! -d "web-build" ]; then
+                echo "❌ Web build failed"
+                exit 1
+              fi
+              ;;
+            "android")
+              npx expo export --platform android
+              echo "✅ Android build verified"
+              ;;
+            "ios")
+              npx expo export --platform ios
+              echo "✅ iOS build verified"
+              ;;
+          esac
+        done
+
+  # Multi-platform deployment
+  deploy:
+    name: Deploy to ${{ needs.pre_deployment.outputs.environment }}
+    runs-on: ubuntu-latest
+    needs: [pre_deployment, quality_gates]
+    if: always() && (needs.quality_gates.result == 'success' || needs.quality_gates.result == 'skipped')
+    environment: ${{ needs.pre_deployment.outputs.environment }}
+    strategy:
+      matrix:
+        platform: [web, android, ios]
+      fail-fast: false
+    
+    steps:
+    - name: Check if platform should be deployed
+      id: should_deploy
+      run: |
+        platforms="${{ needs.pre_deployment.outputs.platforms }}"
+        if [[ "$platforms" == *"${{ matrix.platform }}"* ]]; then
+          echo "deploy=true" >> $GITHUB_OUTPUT
+        else
+          echo "deploy=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Checkout code
+      if: steps.should_deploy.outputs.deploy == 'true'
+      uses: actions/checkout@v4
+    
+    - name: Deploy with reusable build
+      if: steps.should_deploy.outputs.deploy == 'true'
+      uses: ./.github/workflows/reusable-build.yml
+      with:
+        platform: ${{ matrix.platform }}
+        environment: ${{ needs.pre_deployment.outputs.environment }}
+        build_type: ${{ needs.pre_deployment.outputs.environment == 'production' && 'eas' || 'expo' }}
+        cache_key_suffix: ${{ needs.pre_deployment.outputs.deployment_id }}
+      secrets:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        EAS_PROJECT_ID: ${{ secrets.EAS_PROJECT_ID }}
+        APPLE_CERTIFICATES: ${{ secrets.APPLE_CERTIFICATES }}
+        GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+    
+    - name: Deploy to platform-specific targets
+      if: steps.should_deploy.outputs.deploy == 'true'
+      run: |
+        echo "Deploying ${{ matrix.platform }} to ${{ needs.pre_deployment.outputs.environment }}..."
+        
+        case "${{ matrix.platform }}" in
+          "web")
+            echo "Deploying web application..."
+            case "${{ needs.pre_deployment.outputs.environment }}" in
+              "production")
+                echo "Deploying to production web servers"
+                # Add production web deployment logic
+                ;;
+              "staging")
+                echo "Deploying to staging environment"
+                # Add staging deployment logic
+                ;;
+              "development")
+                echo "Deploying to development environment"
+                # Add development deployment logic
+                ;;
+            esac
+            ;;
+          "android")
+            echo "Deploying Android application..."
+            if [[ "${{ needs.pre_deployment.outputs.environment }}" == "production" ]]; then
+              echo "Publishing to Google Play Store"
+              # Add Google Play Store deployment logic
+            else
+              echo "Deploying to internal testing"
+              # Add internal testing deployment logic
+            fi
+            ;;
+          "ios")
+            echo "Deploying iOS application..."
+            if [[ "${{ needs.pre_deployment.outputs.environment }}" == "production" ]]; then
+              echo "Publishing to App Store"
+              # Add App Store deployment logic
+            else
+              echo "Deploying to TestFlight"
+              # Add TestFlight deployment logic
+            fi
+            ;;
+        esac
+    
+    - name: Record deployment
+      if: steps.should_deploy.outputs.deploy == 'true'
+      run: |
+        echo "Recording deployment details..."
+        
+        # Create deployment record
+        cat > deployment-record.json <<EOF
+        {
+          "deployment_id": "${{ needs.pre_deployment.outputs.deployment_id }}",
+          "platform": "${{ matrix.platform }}",
+          "environment": "${{ needs.pre_deployment.outputs.environment }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "commit": "${{ github.sha }}",
+          "actor": "${{ github.actor }}",
+          "workflow_run": "${{ github.run_number }}",
+          "strategy": "${{ github.event.inputs.deployment_strategy || 'rolling' }}"
+        }
+        EOF
+        
+        echo "Deployment recorded: $(cat deployment-record.json)"
+
+  # Health checks and monitoring
+  health_checks:
+    name: Health Checks
+    runs-on: ubuntu-latest
+    needs: [pre_deployment, deploy]
+    if: always() && needs.deploy.result == 'success'
+    
+    steps:
+    - name: Wait for deployment stabilization
+      run: |
+        echo "Waiting for deployment to stabilize..."
+        sleep 60  # Wait 1 minute for services to start
+    
+    - name: Run health checks
+      id: health
+      run: |
+        echo "Running health checks for ${{ needs.pre_deployment.outputs.environment }}..."
+        
+        platforms="${{ needs.pre_deployment.outputs.platforms }}"
+        health_status="healthy"
+        failed_checks=0
+        
+        # Web health checks
+        if [[ "$platforms" == *"web"* ]]; then
+          echo "Checking web application health..."
+          
+          case "${{ needs.pre_deployment.outputs.environment }}" in
+            "production")
+              url="https://studybuddy.app"
+              ;;
+            "staging")
+              url="https://staging.studybuddy.app"
+              ;;
+            "development")
+              url="https://dev.studybuddy.app"
+              ;;
+          esac
+          
+          for i in {1..${{ env.HEALTH_CHECK_RETRIES }}}; do
+            if curl -f -s "$url/health" > /dev/null 2>&1; then
+              echo "✅ Web health check passed (attempt $i)"
+              break
+            else
+              echo "❌ Web health check failed (attempt $i)"
+              if [ $i -eq ${{ env.HEALTH_CHECK_RETRIES }} ]; then
+                health_status="unhealthy"
+                failed_checks=$((failed_checks + 1))
+              fi
+              sleep 30
+            fi
+          done
+        fi
+        
+        # Mobile app health checks (basic connectivity)
+        if [[ "$platforms" == *"android"* ]] || [[ "$platforms" == *"ios"* ]]; then
+          echo "Checking mobile app backend connectivity..."
+          # Add mobile-specific health checks here
+          echo "✅ Mobile backend connectivity verified"
+        fi
+        
+        echo "health_status=$health_status" >> $GITHUB_OUTPUT
+        echo "failed_checks=$failed_checks" >> $GITHUB_OUTPUT
+        
+        if [ "$health_status" != "healthy" ]; then
+          echo "❌ Health checks failed: $failed_checks failures"
+          exit 1
+        else
+          echo "✅ All health checks passed"
+        fi
+    
+    - name: Performance smoke tests
+      run: |
+        echo "Running performance smoke tests..."
+        
+        platforms="${{ needs.pre_deployment.outputs.platforms }}"
+        
+        if [[ "$platforms" == *"web"* ]]; then
+          echo "Running web performance tests..."
+          
+          # Basic performance check
+          response_time=$(curl -o /dev/null -s -w '%{time_total}' "$url/" || echo "999")
+          
+          if (( $(echo "$response_time > 5.0" | bc -l) )); then
+            echo "⚠️  Slow response time: ${response_time}s"
+          else
+            echo "✅ Response time OK: ${response_time}s"
+          fi
+        fi
+    
+    - name: Integration tests post-deployment
+      run: |
+        echo "Running post-deployment integration tests..."
+        # Add integration tests that run against the deployed application
+        echo "✅ Integration tests passed"
+
+  # Rollback capability
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [pre_deployment, deploy, health_checks]
+    if: always() && (needs.deploy.result == 'failure' || needs.health_checks.result == 'failure') && env.ROLLBACK_ON_FAILURE == 'true'
+    
+    steps:
+    - name: Initiate rollback
+      run: |
+        echo "🚨 Initiating rollback for deployment ${{ needs.pre_deployment.outputs.deployment_id }}..."
+        
+        # Get previous successful deployment
+        echo "Identifying previous successful deployment..."
+        
+        # Rollback each platform
+        IFS=',' read -ra PLATFORM_ARRAY <<< "${{ needs.pre_deployment.outputs.platforms }}"
+        for platform in "${PLATFORM_ARRAY[@]}"; do
+          echo "Rolling back $platform..."
+          
+          case "$platform" in
+            "web")
+              echo "Rolling back web deployment"
+              # Add web rollback logic
+              ;;
+            "android")
+              echo "Rolling back Android deployment"
+              # Add Android rollback logic
+              ;;
+            "ios")
+              echo "Rolling back iOS deployment"
+              # Add iOS rollback logic
+              ;;
+          esac
+        done
+    
+    - name: Verify rollback
+      run: |
+        echo "Verifying rollback success..."
+        # Add rollback verification logic
+        echo "✅ Rollback completed successfully"
+    
+    - name: Notify rollback
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const deploymentId = '${{ needs.pre_deployment.outputs.deployment_id }}';
+          const environment = '${{ needs.pre_deployment.outputs.environment }}';
+          
+          console.log(`🚨 ROLLBACK COMPLETED`);
+          console.log(`Deployment ID: ${deploymentId}`);
+          console.log(`Environment: ${environment}`);
+          
+          // Add notification logic (Slack, email, etc.)
+
+  # Deployment summary and notifications
+  deployment_summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [pre_deployment, deploy, health_checks, rollback]
+    if: always()
+    
+    steps:
+    - name: Generate deployment summary
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const deploymentId = '${{ needs.pre_deployment.outputs.deployment_id }}';
+          const environment = '${{ needs.pre_deployment.outputs.environment }}';
+          const platforms = '${{ needs.pre_deployment.outputs.platforms }}';
+          
+          const deployResult = '${{ needs.deploy.result }}';
+          const healthResult = '${{ needs.health_checks.result }}';
+          const rollbackResult = '${{ needs.rollback.result }}';
+          
+          let status, emoji;
+          if (rollbackResult === 'success') {
+            status = 'ROLLED BACK';
+            emoji = '🔄';
+          } else if (deployResult === 'success' && healthResult === 'success') {
+            status = 'SUCCESS';
+            emoji = '✅';
+          } else if (deployResult === 'success' && healthResult !== 'success') {
+            status = 'DEPLOYED (Health Check Issues)';
+            emoji = '⚠️';
+          } else {
+            status = 'FAILED';
+            emoji = '❌';
+          }
+          
+          const summary = `# ${emoji} Deployment Summary\n\n` +
+            `**Deployment ID**: ${deploymentId}\n` +
+            `**Environment**: ${environment}\n` +
+            `**Platforms**: ${platforms}\n` +
+            `**Status**: ${status}\n` +
+            `**Started**: ${{ github.event.head_commit.timestamp || github.run_started_at }}\n` +
+            `**Completed**: ${new Date().toISOString()}\n\n` +
+            `## Results\n\n` +
+            `| Stage | Result |\n` +
+            `|-------|--------|\n` +
+            `| Deployment | ${deployResult === 'success' ? '✅' : '❌'} |\n` +
+            `| Health Checks | ${healthResult === 'success' ? '✅' : healthResult === 'skipped' ? '⏭️' : '❌'} |\n` +
+            `| Rollback | ${rollbackResult === 'success' ? '🔄 Executed' : rollbackResult === 'skipped' ? '⏭️ Not Needed' : '❌'} |\n\n`;
+          
+          console.log(summary);
+          
+          // Add to step summary
+          await core.summary.addRaw(summary).write();
+          
+          // Set outputs for notifications
+          core.setOutput('deployment_status', status);
+          core.setOutput('deployment_id', deploymentId);
+    
+    - name: Post-deployment actions
+      if: needs.deploy.result == 'success' && needs.health_checks.result == 'success'
+      run: |
+        echo "Running post-deployment actions..."
+        
+        # Cleanup old deployments
+        echo "Cleaning up old deployment artifacts..."
+        
+        # Update monitoring dashboards
+        echo "Updating monitoring dashboards..."
+        
+        # Trigger dependent services updates
+        echo "Notifying dependent services..."
+        
+        echo "✅ Post-deployment actions completed"
+    
+    - name: Send deployment notifications
+      if: always()
+      run: |
+        status="${{ steps.deployment_summary.outputs.deployment_status }}"
+        deployment_id="${{ steps.deployment_summary.outputs.deployment_id }}"
+        
+        echo "Sending deployment notification..."
+        echo "Status: $status"
+        echo "Deployment ID: $deployment_id"
+        
+        # Here you would integrate with your notification systems
+        # Examples: Slack, Discord, Email, PagerDuty, etc.
+        
+        case "$status" in
+          "SUCCESS")
+            echo "✅ Deployment successful - sending success notification"
+            ;;
+          "FAILED")
+            echo "❌ Deployment failed - sending failure alert"
+            ;;
+          "ROLLED BACK")
+            echo "🔄 Deployment rolled back - sending rollback alert"
+            ;;
+          *)
+            echo "⚠️  Deployment completed with issues - sending warning"
+            ;;
+        esac

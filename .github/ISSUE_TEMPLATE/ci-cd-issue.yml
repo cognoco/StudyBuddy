@@ -1,0 +1,115 @@
+name: 🔧 CI/CD Pipeline Issue
+description: Report issues with the CI/CD pipeline, builds, or deployments
+title: "[CI/CD] "
+labels: ["ci/cd", "bug"]
+assignees: 
+  - cognoco/devops
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a CI/CD issue! Please provide as much detail as possible.
+
+  - type: dropdown
+    id: pipeline_type
+    attributes:
+      label: Pipeline Type
+      description: Which pipeline is experiencing issues?
+      options:
+        - Enhanced CI/CD Pipeline
+        - PR Validation Pipeline  
+        - Release Automation Pipeline
+        - Performance Monitoring
+        - Feature Branch CI
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Which environment is affected?
+      options:
+        - Development
+        - Staging
+        - Production
+        - All environments
+    validations:
+      required: true
+
+  - type: textarea
+    id: issue_description
+    attributes:
+      label: Issue Description
+      description: Describe the issue you're experiencing
+      placeholder: |
+        Example: The Android build is failing in the production pipeline with error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1. Go to Actions tab
+        2. Run workflow...
+        3. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected Behavior
+      description: What should happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs_output
+    attributes:
+      label: Logs/Output
+      description: Paste relevant logs or error output
+      render: shell
+
+  - type: input
+    id: workflow_run
+    attributes:
+      label: Workflow Run ID
+      description: If applicable, provide the GitHub Actions run ID or URL
+      placeholder: "https://github.com/cognoco/StudyBuddy/actions/runs/1234567890"
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How critical is this issue?
+      options:
+        - Low - Minor inconvenience
+        - Medium - Affects development workflow
+        - High - Blocks deployments
+        - Critical - Production is down
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked the GitHub Actions logs
+          required: true
+        - label: I have searched for similar issues
+          required: true
+        - label: I have provided all requested information
+          required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional Context
+      description: Any other information that might be helpful

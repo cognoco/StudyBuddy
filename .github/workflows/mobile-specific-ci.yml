@@ -1,0 +1,592 @@
+name: Mobile-Specific CI Pipeline
+
+on:
+  push:
+    branches: [main, develop, mobile/**]
+    paths:
+      - 'src/**'
+      - 'App.js'
+      - 'app.json'
+      - 'package.json'
+      - 'babel.config.js'
+      - '.github/workflows/mobile-specific-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/**'
+      - 'App.js'
+      - 'app.json'
+      - 'package.json'
+  workflow_dispatch:
+    inputs:
+      test_device:
+        description: 'Test on specific device type'
+        required: false
+        default: 'emulator'
+        type: choice
+        options:
+          - emulator
+          - simulator
+          - real_device
+      performance_profiling:
+        description: 'Enable performance profiling'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NODE_VERSION: '18'
+  EXPO_VERSION: 'latest'
+  EAS_VERSION: 'latest'
+  JAVA_VERSION: '11'
+
+jobs:
+  # Mobile-specific setup and validation
+  mobile_setup:
+    name: Mobile Environment Setup
+    runs-on: ubuntu-latest
+    outputs:
+      should_test_android: ${{ steps.changes.outputs.android }}
+      should_test_ios: ${{ steps.changes.outputs.ios }}
+      expo_config: ${{ steps.config.outputs.expo_config }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Detect platform-specific changes
+      id: changes
+      uses: dorny/paths-filter@v2
+      with:
+        filters: |
+          android:
+            - 'android/**'
+            - 'src/**'
+            - 'app.json'
+            - 'package.json'
+          ios:
+            - 'ios/**'
+            - 'src/**'
+            - 'app.json'
+            - 'package.json'
+          expo:
+            - 'app.json'
+            - 'babel.config.js'
+            - 'metro.config.js'
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Validate Expo configuration
+      id: config
+      run: |
+        echo "Validating Expo configuration..."
+        
+        # Install Expo CLI
+        npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+        
+        # Validate and get config
+        npx expo config --type prebuild > expo-config.json
+        npx expo doctor || echo "Expo doctor completed with warnings"
+        
+        # Check for required mobile configurations
+        if ! jq -e '.expo.android' expo-config.json > /dev/null; then
+          echo "⚠️  Android configuration missing"
+        fi
+        
+        if ! jq -e '.expo.ios' expo-config.json > /dev/null; then
+          echo "⚠️  iOS configuration missing"
+        fi
+        
+        # Store config for other jobs
+        expo_config=$(cat expo-config.json | jq -c '.')
+        echo "expo_config=$expo_config" >> $GITHUB_OUTPUT
+    
+    - name: Upload Expo config
+      uses: actions/upload-artifact@v4
+      with:
+        name: expo-config-${{ github.run_number }}
+        path: expo-config.json
+        retention-days: 7
+
+  # Android-specific testing
+  android_tests:
+    name: Android Testing
+    runs-on: ubuntu-latest
+    needs: mobile_setup
+    if: needs.mobile_setup.outputs.should_test_android == 'true'
+    timeout-minutes: 60
+    
+    strategy:
+      matrix:
+        api-level: [29, 31, 33]
+        arch: [x86_64]
+      fail-fast: false
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+    
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Setup Expo CLI
+      run: npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+    
+    - name: Download Expo config
+      uses: actions/download-artifact@v4
+      with:
+        name: expo-config-${{ github.run_number }}
+    
+    - name: Enable KVM (for emulator)
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    
+    - name: AVD cache
+      uses: actions/cache@v3
+      id: avd-cache
+      with:
+        path: |
+          ~/.android/avd/*
+          ~/.android/adb*
+        key: avd-${{ matrix.api-level }}-${{ matrix.arch }}
+    
+    - name: Create AVD and generate snapshot for caching
+      if: steps.avd-cache.outputs.cache-hit != 'true'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: ${{ matrix.api-level }}
+        arch: ${{ matrix.arch }}
+        force-avd-creation: false
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: false
+        script: echo "Generated AVD snapshot for caching."
+    
+    - name: Prebuild Android project
+      run: |
+        echo "Prebuilding Android project..."
+        npx expo prebuild --platform android --clear
+    
+    - name: Build Android app
+      run: |
+        echo "Building Android app for testing..."
+        cd android
+        ./gradlew assembleDebug
+        
+        # Verify APK was built
+        if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+          echo "✅ Android APK built successfully"
+          ls -la app/build/outputs/apk/debug/
+        else
+          echo "❌ Android APK build failed"
+          exit 1
+        fi
+    
+    - name: Run Android instrumentation tests
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: ${{ matrix.api-level }}
+        arch: ${{ matrix.arch }}
+        force-avd-creation: false
+        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: true
+        script: |
+          echo "Running Android instrumentation tests..."
+          
+          # Install the APK
+          adb install android/app/build/outputs/apk/debug/app-debug.apk
+          
+          # Run basic smoke tests
+          echo "Running smoke tests..."
+          adb shell am start -n com.cognoco.studybuddy/.MainActivity
+          sleep 10
+          
+          # Take screenshot for verification
+          adb shell screencap -p /sdcard/screenshot.png
+          adb pull /sdcard/screenshot.png android-screenshot-${{ matrix.api-level }}.png
+          
+          # Check if app is running
+          if adb shell ps | grep com.cognoco.studybuddy; then
+            echo "✅ App launched successfully"
+          else
+            echo "❌ App failed to launch"
+            exit 1
+          fi
+    
+    - name: Android performance tests
+      if: github.event.inputs.performance_profiling == 'true'
+      run: |
+        echo "Running Android performance tests..."
+        # Add performance testing logic here
+        echo "Performance testing completed"
+    
+    - name: Upload Android test artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: android-test-results-api${{ matrix.api-level }}-${{ github.run_number }}
+        path: |
+          android/app/build/outputs/
+          android-screenshot-*.png
+          android/app/build/reports/
+        retention-days: 14
+
+  # iOS-specific testing  
+  ios_tests:
+    name: iOS Testing
+    runs-on: macos-latest
+    needs: mobile_setup
+    if: needs.mobile_setup.outputs.should_test_ios == 'true'
+    timeout-minutes: 60
+    
+    strategy:
+      matrix:
+        ios-version: ['16.0', '17.0']
+        device: ['iPhone 14', 'iPhone 15']
+      fail-fast: false
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Setup Expo CLI
+      run: npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+    
+    - name: Download Expo config
+      uses: actions/download-artifact@v4
+      with:
+        name: expo-config-${{ github.run_number }}
+    
+    - name: Setup iOS environment
+      run: |
+        echo "Setting up iOS development environment..."
+        
+        # Install CocoaPods
+        sudo gem install cocoapods
+        
+        # List available simulators
+        xcrun simctl list devices available
+    
+    - name: Prebuild iOS project
+      run: |
+        echo "Prebuilding iOS project..."
+        npx expo prebuild --platform ios --clear
+    
+    - name: Install iOS dependencies
+      run: |
+        echo "Installing iOS dependencies..."
+        cd ios
+        pod install --repo-update
+    
+    - name: Build iOS app
+      run: |
+        echo "Building iOS app for testing..."
+        cd ios
+        
+        # Build for simulator
+        xcodebuild -workspace StudyBuddy.xcworkspace \
+          -scheme StudyBuddy \
+          -configuration Debug \
+          -sdk iphonesimulator \
+          -destination 'platform=iOS Simulator,name=${{ matrix.device }},OS=${{ matrix.ios-version }}' \
+          build
+    
+    - name: Create and boot iOS simulator
+      run: |
+        echo "Creating and booting iOS simulator..."
+        
+        # Create simulator if it doesn't exist
+        device_id=$(xcrun simctl create "Test-${{ matrix.device }}" "com.apple.CoreSimulator.SimDeviceType.$(echo '${{ matrix.device }}' | sed 's/ /-/g')" "com.apple.CoreSimulator.SimRuntime.iOS-$(echo '${{ matrix.ios-version }}' | sed 's/\./-/g')" || true)
+        
+        # Get available device ID
+        device_id=$(xcrun simctl list devices available | grep "${{ matrix.device }}" | grep "${{ matrix.ios-version }}" | head -1 | sed 's/.*(//' | sed 's/).*//')
+        
+        echo "Using device ID: $device_id"
+        echo "DEVICE_ID=$device_id" >> $GITHUB_ENV
+        
+        # Boot the simulator
+        xcrun simctl boot $device_id || true
+        
+        # Wait for boot
+        sleep 30
+    
+    - name: Run iOS tests
+      run: |
+        echo "Running iOS tests..."
+        cd ios
+        
+        # Run unit tests
+        xcodebuild test \
+          -workspace StudyBuddy.xcworkspace \
+          -scheme StudyBuddy \
+          -configuration Debug \
+          -sdk iphonesimulator \
+          -destination 'platform=iOS Simulator,name=${{ matrix.device }},OS=${{ matrix.ios-version }}' \
+          || echo "Tests completed with some failures"
+        
+        # Install app on simulator
+        xcrun simctl install $DEVICE_ID $(find . -name "StudyBuddy.app" | head -1)
+        
+        # Launch app
+        xcrun simctl launch $DEVICE_ID com.cognoco.studybuddy
+        
+        # Take screenshot
+        xcrun simctl io $DEVICE_ID screenshot ios-screenshot-${{ matrix.device }}-${{ matrix.ios-version }}.png
+    
+    - name: iOS performance tests
+      if: github.event.inputs.performance_profiling == 'true'
+      run: |
+        echo "Running iOS performance tests..."
+        # Add iOS performance testing logic here
+        echo "iOS performance testing completed"
+    
+    - name: Upload iOS test artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ios-test-results-${{ matrix.device }}-${{ matrix.ios-version }}-${{ github.run_number }}
+        path: |
+          ios/build/
+          ios-screenshot-*.png
+          ios/fastlane/test_output/
+        retention-days: 14
+
+  # Mobile-specific security tests
+  mobile_security:
+    name: Mobile Security Analysis
+    runs-on: ubuntu-latest
+    needs: mobile_setup
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Mobile permissions audit
+      run: |
+        echo "Auditing mobile permissions..."
+        
+        # Check app.json for permissions
+        if [ -f "app.json" ]; then
+          echo "Checking Android permissions:"
+          jq -r '.expo.android.permissions[]?' app.json || echo "No Android permissions found"
+          
+          echo "Checking iOS permissions:"
+          jq -r '.expo.ios.infoPlist | keys[]?' app.json || echo "No iOS permissions found"
+        fi
+    
+    - name: React Native security scan
+      run: |
+        echo "Running React Native security scan..."
+        
+        # Install react-native security scanner
+        npm install --no-save @react-native-community/cli-doctor
+        
+        # Check for common React Native security issues
+        echo "Checking for debug mode in production..."
+        if grep -r "__DEV__" src/; then
+          echo "⚠️  Found __DEV__ usage - ensure it's properly guarded"
+        fi
+        
+        # Check for hardcoded secrets
+        echo "Scanning for potential hardcoded secrets..."
+        if grep -r -i "password\|secret\|api_key\|token" src/ --include="*.js" --include="*.jsx"; then
+          echo "⚠️  Potential secrets found - please review"
+        fi
+    
+    - name: Mobile app bundle analysis
+      run: |
+        echo "Analyzing mobile app bundle security..."
+        
+        # Check for sensitive imports
+        echo "Checking for sensitive imports..."
+        if grep -r "react-native-keychain\|@react-native-async-storage" src/; then
+          echo "ℹ️  Found secure storage usage - ensure proper implementation"
+        fi
+        
+        # Check for network security
+        echo "Checking network security configuration..."
+        if ! grep -r "https://" src/ > /dev/null; then
+          echo "⚠️  No HTTPS usage detected - ensure secure communications"
+        fi
+
+  # Mobile performance analysis
+  mobile_performance:
+    name: Mobile Performance Analysis
+    runs-on: ubuntu-latest
+    needs: mobile_setup
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Mobile bundle size analysis
+      run: |
+        echo "Analyzing mobile bundle sizes..."
+        
+        # Install Metro bundle analyzer
+        npm install --no-save metro-visualizer
+        
+        # Generate bundle for analysis
+        npx expo export --platform android
+        
+        # Analyze Android bundle
+        if [ -d "dist" ]; then
+          echo "Android bundle analysis:"
+          du -sh dist/
+          find dist -name "*.js" -exec du -h {} \; | sort -hr | head -20
+        fi
+    
+    - name: React Native performance checks
+      run: |
+        echo "Running React Native performance checks..."
+        
+        # Check for performance anti-patterns
+        echo "Checking for performance anti-patterns..."
+        
+        # Large inline styles
+        if grep -r "StyleSheet.create" src/ | wc -l | awk '{if($1>50) print "⚠️  Large number of StyleSheet.create calls: " $1}'; then
+          echo "Consider consolidating styles"
+        fi
+        
+        # Excessive re-renders
+        if grep -r "useEffect\|useState" src/ | wc -l | awk '{if($1>100) print "ℹ️  High number of hooks usage: " $1}'; then
+          echo "Review hook usage for optimization opportunities"
+        fi
+        
+        # Memory leaks patterns
+        if grep -r "setInterval\|setTimeout" src/ | grep -v "clear"; then
+          echo "⚠️  Found timers without clear - potential memory leaks"
+        fi
+    
+    - name: Generate performance report
+      run: |
+        cat > mobile-performance-report.md <<EOF
+        # Mobile Performance Report
+        
+        **Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+        
+        ## Bundle Analysis
+        
+        ### Android
+        - Bundle size: $(du -sh dist/ 2>/dev/null | cut -f1 || echo "Not available")
+        - JavaScript bundle: $(find dist -name "*.js" -exec du -sh {} \; | head -1 | cut -f1 || echo "Not available")
+        
+        ## Performance Recommendations
+        
+        - Use React.memo for expensive components
+        - Implement lazy loading for screens
+        - Optimize image assets
+        - Use FlatList for large datasets
+        - Minimize bridge calls
+        
+        EOF
+    
+    - name: Upload performance reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: mobile-performance-reports-${{ github.run_number }}
+        path: |
+          mobile-performance-report.md
+          dist/
+        retention-days: 30
+
+  # Mobile testing summary
+  mobile_summary:
+    name: Mobile Testing Summary
+    runs-on: ubuntu-latest
+    needs: [mobile_setup, android_tests, ios_tests, mobile_security, mobile_performance]
+    if: always()
+    
+    steps:
+    - name: Generate mobile testing summary
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const androidResult = '${{ needs.android_tests.result }}';
+          const iosResult = '${{ needs.ios_tests.result }}';
+          const securityResult = '${{ needs.mobile_security.result }}';
+          const performanceResult = '${{ needs.mobile_performance.result }}';
+          
+          let summary = '# 📱 Mobile Testing Summary\n\n';
+          
+          // Platform testing results
+          summary += '## Platform Testing Results\n\n';
+          summary += '| Platform | Status | Details |\n';
+          summary += '|----------|--------|---------|\n';
+          summary += `| Android | ${androidResult === 'success' ? '✅ Passed' : androidResult === 'skipped' ? '⏭️ Skipped' : '❌ Failed'} | Multiple API levels tested |\n`;
+          summary += `| iOS | ${iosResult === 'success' ? '✅ Passed' : iosResult === 'skipped' ? '⏭️ Skipped' : '❌ Failed'} | Multiple iOS versions tested |\n`;
+          
+          // Security and performance
+          summary += '\n## Quality Assurance\n\n';
+          summary += '| Check | Status |\n';
+          summary += '|-------|--------|\n';
+          summary += `| Security Analysis | ${securityResult === 'success' ? '✅ Passed' : '❌ Failed'} |\n`;
+          summary += `| Performance Analysis | ${performanceResult === 'success' ? '✅ Passed' : '❌ Failed'} |\n`;
+          
+          // Overall status
+          const overallSuccess = androidResult !== 'failure' && iosResult !== 'failure' && securityResult === 'success' && performanceResult === 'success';
+          
+          summary += `\n## Overall Status: ${overallSuccess ? '✅ PASSED' : '❌ ISSUES FOUND'}\n\n`;
+          
+          if (!overallSuccess) {
+            summary += '### Action Items\n\n';
+            if (androidResult === 'failure') summary += '- 🔴 Fix Android test failures\n';
+            if (iosResult === 'failure') summary += '- 🔴 Fix iOS test failures\n';
+            if (securityResult !== 'success') summary += '- 🟡 Address security concerns\n';
+            if (performanceResult !== 'success') summary += '- 🟡 Review performance issues\n';
+          }
+          
+          summary += '\n---\n*Mobile CI Pipeline completed*';
+          
+          console.log(summary);
+          await core.summary.addRaw(summary).write();

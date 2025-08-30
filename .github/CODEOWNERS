@@ -1,0 +1,33 @@
+# Global code owners
+* @cognoco/maintainers
+
+# CI/CD and workflow files
+/.github/ @cognoco/devops @cognoco/maintainers
+/config/ci/ @cognoco/devops
+
+# Core application files
+/src/ @cognoco/frontend-team @cognoco/maintainers
+/App.js @cognoco/frontend-team @cognoco/maintainers
+
+# Configuration files
+/package.json @cognoco/maintainers
+/app.json @cognoco/maintainers
+*.config.js @cognoco/devops @cognoco/maintainers
+
+# Security-sensitive files
+/secrets/ @cognoco/security-team @cognoco/maintainers
+*.key @cognoco/security-team @cognoco/maintainers
+
+# Documentation
+/docs/ @cognoco/maintainers
+README.md @cognoco/maintainers
+CHANGELOG.md @cognoco/maintainers
+
+# Test files
+**/*.test.js @cognoco/qa-team @cognoco/frontend-team
+**/*.spec.js @cognoco/qa-team @cognoco/frontend-team
+/src/__tests__/ @cognoco/qa-team
+
+# Mobile-specific files
+/android/ @cognoco/mobile-team @cognoco/maintainers
+/ios/ @cognoco/mobile-team @cognoco/maintainers

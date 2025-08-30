@@ -1,0 +1,317 @@
+name: Reusable Build Workflow
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: 'Platform to build for (android, ios, web)'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment (development, staging, production)'
+        required: true
+        type: string
+      build_type:
+        description: 'Build type (expo, eas, preview)'
+        required: false
+        default: 'expo'
+        type: string
+      cache_key_suffix:
+        description: 'Additional cache key suffix'
+        required: false
+        default: ''
+        type: string
+    outputs:
+      build_path:
+        description: 'Path to the build artifacts'
+        value: ${{ jobs.build.outputs.build_path }}
+      build_size:
+        description: 'Size of the build in KB'
+        value: ${{ jobs.build.outputs.build_size }}
+      build_hash:
+        description: 'Hash of the build artifacts'
+        value: ${{ jobs.build.outputs.build_hash }}
+    secrets:
+      EXPO_TOKEN:
+        description: 'Expo authentication token'
+        required: true
+      EAS_PROJECT_ID:
+        description: 'EAS project identifier'
+        required: false
+      APPLE_CERTIFICATES:
+        description: 'iOS certificates for signing'
+        required: false
+      GOOGLE_SERVICES_JSON:
+        description: 'Google services configuration'
+        required: false
+
+env:
+  NODE_VERSION: '18'
+  EXPO_VERSION: 'latest'
+  EAS_VERSION: 'latest'
+
+jobs:
+  build:
+    name: Build ${{ inputs.platform }} (${{ inputs.environment }})
+    runs-on: ${{ inputs.platform == 'ios' && 'macos-latest' || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    outputs:
+      build_path: ${{ steps.artifacts.outputs.path }}
+      build_size: ${{ steps.size.outputs.size }}
+      build_hash: ${{ steps.hash.outputs.hash }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: 'package-lock.json'
+    
+    - name: Restore dependency cache
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.npm
+          node_modules
+          .expo
+        key: ${{ runner.os }}-deps-${{ hashFiles('package-lock.json') }}-${{ inputs.cache_key_suffix }}
+        restore-keys: |
+          ${{ runner.os }}-deps-${{ hashFiles('package-lock.json') }}
+          ${{ runner.os }}-deps-
+    
+    - name: Install dependencies
+      run: npm ci --prefer-offline --no-audit
+    
+    - name: Setup Expo CLI
+      run: npm install -g @expo/cli@${{ env.EXPO_VERSION }}
+    
+    - name: Setup EAS CLI
+      if: inputs.build_type == 'eas'
+      run: npm install -g eas-cli@${{ env.EAS_VERSION }}
+    
+    - name: Configure environment
+      run: |
+        echo "Configuring ${{ inputs.environment }} environment for ${{ inputs.platform }}"
+        
+        # Set environment-specific variables
+        case "${{ inputs.environment }}" in
+          "production")
+            export NODE_ENV=production
+            export EXPO_ENV=production
+            echo "NODE_ENV=production" >> $GITHUB_ENV
+            echo "EXPO_ENV=production" >> $GITHUB_ENV
+            ;;
+          "staging")
+            export NODE_ENV=staging
+            export EXPO_ENV=staging
+            echo "NODE_ENV=staging" >> $GITHUB_ENV
+            echo "EXPO_ENV=staging" >> $GITHUB_ENV
+            ;;
+          "development")
+            export NODE_ENV=development
+            export EXPO_ENV=development
+            echo "NODE_ENV=development" >> $GITHUB_ENV
+            echo "EXPO_ENV=development" >> $GITHUB_ENV
+            ;;
+        esac
+    
+    - name: Setup iOS certificates
+      if: inputs.platform == 'ios' && secrets.APPLE_CERTIFICATES != ''
+      run: |
+        echo "Setting up iOS certificates..."
+        # Add certificate setup logic here
+        echo "${{ secrets.APPLE_CERTIFICATES }}" | base64 -d > ios-certificates.p12
+    
+    - name: Setup Android keystore
+      if: inputs.platform == 'android' && inputs.environment == 'production'
+      run: |
+        echo "Setting up Android keystore..."
+        # Add Android keystore setup logic here
+    
+    - name: Configure Google Services
+      if: inputs.platform == 'android' && secrets.GOOGLE_SERVICES_JSON != ''
+      run: |
+        echo "${{ secrets.GOOGLE_SERVICES_JSON }}" > google-services.json
+    
+    - name: Pre-build setup
+      run: |
+        echo "Running pre-build setup..."
+        
+        # Clear any existing builds
+        rm -rf web-build dist *.apk *.aab *.ipa
+        
+        # Verify app configuration
+        npx expo config --json > expo-config.json
+        echo "Current Expo configuration:"
+        cat expo-config.json | jq '.'
+    
+    - name: Build with Expo (development/staging)
+      if: inputs.build_type == 'expo'
+      run: |
+        echo "Building with Expo for ${{ inputs.platform }}..."
+        
+        case "${{ inputs.platform }}" in
+          "android")
+            npx expo export --platform android
+            ;;
+          "ios")
+            npx expo export --platform ios
+            ;;
+          "web")
+            npx expo export --platform web --clear
+            ;;
+        esac
+      env:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    
+    - name: Build with EAS (production)
+      if: inputs.build_type == 'eas'
+      run: |
+        echo "Building with EAS for ${{ inputs.platform }}..."
+        
+        case "${{ inputs.platform }}" in
+          "android")
+            eas build --platform android --profile ${{ inputs.environment }} --non-interactive --wait
+            ;;
+          "ios")
+            eas build --platform ios --profile ${{ inputs.environment }} --non-interactive --wait
+            ;;
+          "web")
+            npx expo export --platform web --clear
+            ;;
+        esac
+      env:
+        EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        EAS_PROJECT_ID: ${{ secrets.EAS_PROJECT_ID }}
+    
+    - name: Post-build processing
+      run: |
+        echo "Running post-build processing..."
+        
+        # Create build info
+        cat > build-info.json <<EOF
+        {
+          "platform": "${{ inputs.platform }}",
+          "environment": "${{ inputs.environment }}",
+          "build_type": "${{ inputs.build_type }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "commit": "${{ github.sha }}",
+          "ref": "${{ github.ref }}",
+          "run_number": "${{ github.run_number }}",
+          "actor": "${{ github.actor }}"
+        }
+        EOF
+        
+        # Verify build outputs
+        echo "Build outputs:"
+        find . -name "*.apk" -o -name "*.aab" -o -name "*.ipa" -o -type d -name "web-build" -o -type d -name "dist" | head -20
+    
+    - name: Calculate build size
+      id: size
+      run: |
+        total_size=0
+        
+        case "${{ inputs.platform }}" in
+          "android")
+            if ls *.apk *.aab 1> /dev/null 2>&1; then
+              total_size=$(du -ck *.apk *.aab 2>/dev/null | tail -1 | cut -f1)
+            fi
+            ;;
+          "ios")
+            if ls *.ipa 1> /dev/null 2>&1; then
+              total_size=$(du -ck *.ipa 2>/dev/null | tail -1 | cut -f1)
+            fi
+            ;;
+          "web")
+            if [ -d "web-build" ]; then
+              total_size=$(du -sk web-build | cut -f1)
+            fi
+            ;;
+        esac
+        
+        echo "size=${total_size}" >> $GITHUB_OUTPUT
+        echo "Build size: ${total_size}KB"
+    
+    - name: Generate build hash
+      id: hash
+      run: |
+        build_hash=""
+        
+        case "${{ inputs.platform }}" in
+          "android")
+            if ls *.apk *.aab 1> /dev/null 2>&1; then
+              build_hash=$(sha256sum *.apk *.aab 2>/dev/null | sha256sum | cut -d' ' -f1)
+            fi
+            ;;
+          "ios")
+            if ls *.ipa 1> /dev/null 2>&1; then
+              build_hash=$(sha256sum *.ipa 2>/dev/null | sha256sum | cut -d' ' -f1)
+            fi
+            ;;
+          "web")
+            if [ -d "web-build" ]; then
+              build_hash=$(find web-build -type f -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
+            fi
+            ;;
+        esac
+        
+        echo "hash=${build_hash}" >> $GITHUB_OUTPUT
+        echo "Build hash: ${build_hash}"
+    
+    - name: Set artifact path
+      id: artifacts
+      run: |
+        artifact_path="."
+        case "${{ inputs.platform }}" in
+          "android")
+            artifact_path="android-builds"
+            mkdir -p $artifact_path
+            mv *.apk *.aab $artifact_path/ 2>/dev/null || true
+            ;;
+          "ios")
+            artifact_path="ios-builds"
+            mkdir -p $artifact_path
+            mv *.ipa $artifact_path/ 2>/dev/null || true
+            ;;
+          "web")
+            artifact_path="web-build"
+            ;;
+        esac
+        
+        echo "path=${artifact_path}" >> $GITHUB_OUTPUT
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-${{ inputs.platform }}-${{ inputs.environment }}-${{ github.run_number }}
+        path: |
+          ${{ steps.artifacts.outputs.path }}
+          build-info.json
+          expo-config.json
+        retention-days: ${{ inputs.environment == 'production' && 90 || 30 }}
+        compression-level: 6
+    
+    - name: Build summary
+      run: |
+        echo "## 🏗️ Build Summary (${{ inputs.platform }})" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Type**: ${{ inputs.build_type }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Size**: ${{ steps.size.outputs.size }}KB" >> $GITHUB_STEP_SUMMARY
+        echo "- **Hash**: \`${{ steps.hash.outputs.hash }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Artifact**: ${{ steps.artifacts.outputs.path }}" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        # Clean up sensitive files
+        rm -f ios-certificates.p12 google-services.json
+        
+        # Clean up large temporary files
+        rm -rf .expo/web-cache .expo/packager-cache
+        rm -rf node_modules/.cache
